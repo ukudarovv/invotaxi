@@ -1,0 +1,39 @@
+========================================
+  BACKEND СЕРВЕР ЗАПУЩЕН И РАБОТАЕТ!
+========================================
+
+URL: http://localhost:8000
+
+API Endpoints:
+  - GET  /api/regions/                    [Публичный]
+  - POST /api/auth/phone-login/           [Публичный]
+  - POST /api/auth/verify-otp/            [Публичный]
+  - GET  /api/orders/                     [Требует токен]
+  - POST /api/orders/                     [Требует токен]
+  - PATCH /api/orders/{id}/status/        [Требует токен]
+  - GET  /api/drivers/                    [Требует токен]
+  - PATCH /api/drivers/{id}/location/     [Требует токен]
+  - POST /api/dispatch/assign/{id}/      [Требует токен]
+
+WebSocket:
+  - ws://localhost:8000/ws/orders/{id}/
+  - ws://localhost:8000/ws/drivers/{id}/
+  - ws://localhost:8000/ws/passengers/{id}/
+
+Документация:
+  - API_DOCUMENTATION.md
+  - API_EXAMPLES.md
+  - QUICK_START.md
+  - INTEGRATION_GUIDE.md
+
+Тестовые данные:
+  - 5 регионов
+  - 10 водителей (первые 5 онлайн)
+  - 51 пассажир
+
+Тестовый аккаунт:
+  Телефон: +7 (777) 777-77-77
+  (OTP код выводится в консоль Django)
+
+========================================
+

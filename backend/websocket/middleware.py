@@ -45,20 +45,53 @@ class JWTAuthMiddleware(BaseMiddleware):
     """
     
     async def __call__(self, scope, receive, send):
+        # Проверяем тип протокола
+        protocol_type = scope.get('type', 'unknown')
+        path = scope.get('path', 'unknown')
+        
+        # Выводим в консоль для немедленного отображения
+        print(f"[JWTAuthMiddleware] Protocol type: {protocol_type}, Path: {path}")
+        logger.info(f"JWTAuthMiddleware: Protocol type: {protocol_type}, Path: {path}")
+        logger.info(f"JWTAuthMiddleware: Scope keys: {list(scope.keys())}")
+        
+        # Логируем полную информацию о scope для диагностики
+        if protocol_type == 'websocket':
+            logger.info(f"WebSocket upgrade attempt:")
+            logger.info(f"  - Path: {path}")
+            logger.info(f"  - Headers: {dict(scope.get('headers', []))}")
+            logger.info(f"  - Query string: {scope.get('query_string', b'').decode()}")
+            logger.info(f"  - Client: {scope.get('client', 'unknown')}")
+            logger.info(f"  - Server: {scope.get('server', 'unknown')}")
+        
         # Извлекаем токен из query string
         query_string = scope.get('query_string', b'').decode()
         query_params = parse_qs(query_string)
         token = query_params.get('token', [None])[0]
         
         # Логируем попытку подключения
-        path = scope.get('path', 'unknown')
+        print(f"[JWTAuthMiddleware] WebSocket connection attempt to {path}, token present: {token is not None}")
         logger.info(f"WebSocket connection attempt to {path}, token present: {token is not None}")
         
         # Если токен есть, пытаемся аутентифицировать пользователя
         if token:
-            scope['user'] = await get_user_from_token(token)
+            try:
+                scope['user'] = await get_user_from_token(token)
+                user = scope['user']
+                is_authenticated = user.is_authenticated if hasattr(user, 'is_authenticated') else False
+                user_id = getattr(user, 'id', None)
+                username = getattr(user, 'username', None)
+                
+                print(f"[JWTAuthMiddleware] User authenticated: {is_authenticated}, User ID: {user_id}, Username: {username}")
+                logger.info(f"WebSocket authentication result: authenticated={is_authenticated}, user_id={user_id}, username={username}")
+                
+                if not is_authenticated:
+                    logger.warning(f"WebSocket: Token provided but authentication failed for path {path}")
+            except Exception as e:
+                logger.error(f"WebSocket: Error during authentication: {str(e)}", exc_info=True)
+                scope['user'] = AnonymousUser()
         else:
             logger.warning(f"WebSocket: No token provided for {path}")
+            print(f"[JWTAuthMiddleware] No token provided for {path}")
             scope['user'] = AnonymousUser()
         
         return await super().__call__(scope, receive, send)

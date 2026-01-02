@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.validators import MinValueValidator
+from decimal import Decimal
 from accounts.models import User, Passenger, Driver
 from regions.models import Region
 from .validators import validate_pickup_time, validate_coordinates
@@ -20,6 +21,79 @@ class OrderStatus(models.TextChoices):
     COMPLETED = 'completed', 'Завершено'
     CANCELLED = 'cancelled', 'Отменено'
     INCIDENT = 'incident', 'Инцидент'
+
+
+class PricingConfig(models.Model):
+    """Модель конфигурации ценообразования"""
+    price_per_km = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Цена за километр',
+        default=Decimal('50.00')
+    )
+    price_per_minute_waiting = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Цена за минуту ожидания',
+        default=Decimal('10.00')
+    )
+    minimum_fare = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Минимальная стоимость поездки',
+        default=Decimal('200.00')
+    )
+    companion_fee = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Доплата за сопровождение',
+        default=Decimal('100.00')
+    )
+    disability_category_multiplier = models.JSONField(
+        default=dict,
+        verbose_name='Множители для категорий инвалидности',
+        help_text='Формат: {"I группа": 1.0, "II группа": 1.0, "III группа": 1.0, "Ребенок-инвалид": 0.8}'
+    )
+    night_time_multiplier = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Множитель для ночного времени',
+        default=Decimal('1.2'),
+        help_text='Применяется с 22:00 до 06:00'
+    )
+    weekend_multiplier = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))],
+        verbose_name='Множитель для выходных',
+        default=Decimal('1.1')
+    )
+    region = models.ForeignKey(
+        Region,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pricing_configs',
+        verbose_name='Регион',
+        help_text='Если не указан, применяется ко всем регионам'
+    )
+    is_active = models.BooleanField(default=True, verbose_name='Активен')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создан')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Обновлен')
+
+    class Meta:
+        verbose_name = 'Конфигурация ценообразования'
+        verbose_name_plural = 'Конфигурации ценообразования'
+        ordering = ['-is_active', '-created_at']
+
+    def __str__(self):
+        region_name = self.region.title if self.region else 'Все регионы'
+        return f'Тариф для {region_name} ({self.price_per_km} тг/км)'
 
 
 class Order(models.Model):
@@ -64,6 +138,30 @@ class Order(models.Model):
     rejection_reason = models.TextField(null=True, blank=True, verbose_name='Причина отклонения')
     video_recording = models.BooleanField(null=True, blank=True, verbose_name='Видеозапись')
     upload_started = models.BooleanField(null=True, blank=True, verbose_name='Загрузка начата')
+    
+    # Поля для расчета цены
+    distance_km = models.FloatField(null=True, blank=True, verbose_name='Расстояние в километрах')
+    waiting_time_minutes = models.IntegerField(null=True, blank=True, verbose_name='Время ожидания в минутах')
+    estimated_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Предварительная цена'
+    )
+    final_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name='Финальная цена'
+    )
+    price_breakdown = models.JSONField(
+        null=True,
+        blank=True,
+        verbose_name='Детализация цены',
+        help_text='Разбивка стоимости по компонентам'
+    )
 
     class Meta:
         verbose_name = 'Заказ'

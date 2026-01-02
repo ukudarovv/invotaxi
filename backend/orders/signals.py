@@ -83,6 +83,45 @@ def order_updated(sender, instance, **kwargs):
                     }
                 }
             )
+
+        # Отправляем обновление в dispatch_map группу для карты диспетчеризации
+        # Отправляем только для активных заказов (не draft, не rejected, not completed, not cancelled)
+        active_statuses = [
+            'submitted', 'awaiting_dispatcher_decision', 'active_queue',
+            'assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'
+        ]
+        inactive_statuses = ['completed', 'cancelled', 'rejected', 'draft']
+        
+        order_data = OrderSerializer(instance).data
+        
+        # Если заказ стал неактивным (завершен или отменен), отправляем обновление для удаления с карты
+        if instance.status in inactive_statuses and 'status' in kwargs.get('update_fields', []):
+            async_to_sync(channel_layer.group_send)(
+                'dispatch_map',
+                {
+                    'type': 'order_update',
+                    'data': order_data
+                }
+            )
+        elif instance.status in active_statuses:
+            # Если это новый заказ
+            if kwargs.get('created'):
+                async_to_sync(channel_layer.group_send)(
+                    'dispatch_map',
+                    {
+                        'type': 'order_created',
+                        'data': order_data
+                    }
+                )
+            else:
+                # Обновление существующего заказа
+                async_to_sync(channel_layer.group_send)(
+                    'dispatch_map',
+                    {
+                        'type': 'order_update',
+                        'data': order_data
+                    }
+                )
     except Exception:
         # Игнорируем ошибки WebSocket в production
         pass

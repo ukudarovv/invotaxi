@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from .models import Order, OrderStatus
 from .serializers import OrderSerializer, OrderStatusUpdateSerializer
-from .services import OrderService
+from .services import OrderService, PriceCalculator
 from accounts.models import Passenger, Driver
 
 
@@ -99,7 +99,59 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         # Обновляем статус
         OrderService.update_status(order, new_status, reason, user)
+        
+        # Если заказ завершен, рассчитываем финальную цену
+        if new_status == OrderStatus.COMPLETED and not order.final_price:
+            price_data = PriceCalculator.calculate_final_price(
+                order,
+                actual_distance_km=order.distance_km,
+                actual_waiting_time_minutes=order.waiting_time_minutes
+            )
+            order.distance_km = price_data['distance_km']
+            order.waiting_time_minutes = price_data['waiting_time_minutes']
+            order.final_price = price_data['final_price']
+            order.price_breakdown = price_data['price_breakdown']
+            order.save()
 
+        return Response(OrderSerializer(order).data)
+    
+    @action(detail=True, methods=['post'], url_path='calculate-price')
+    def calculate_price(self, request, pk=None):
+        """Ручной пересчет цены заказа"""
+        order = self.get_object()
+        
+        # Проверяем права доступа (только админы и диспетчеры)
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Нет прав для пересчета цены'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Получаем параметры из запроса (опционально)
+        actual_distance = request.data.get('actual_distance_km')
+        actual_waiting_time = request.data.get('actual_waiting_time_minutes')
+        
+        # Если заказ завершен, рассчитываем финальную цену
+        if order.status == OrderStatus.COMPLETED:
+            price_data = PriceCalculator.calculate_final_price(
+                order,
+                actual_distance_km=actual_distance,
+                actual_waiting_time_minutes=actual_waiting_time
+            )
+            order.distance_km = price_data['distance_km']
+            order.waiting_time_minutes = price_data['waiting_time_minutes']
+            order.final_price = price_data['final_price']
+            order.price_breakdown = price_data['price_breakdown']
+        else:
+            # Иначе пересчитываем предварительную цену
+            price_data = PriceCalculator.calculate_estimated_price(order)
+            order.distance_km = price_data['distance_km']
+            order.waiting_time_minutes = price_data['waiting_time_minutes']
+            order.estimated_price = price_data['estimated_price']
+            order.price_breakdown = price_data['price_breakdown']
+        
+        order.save()
+        
         return Response(OrderSerializer(order).data)
 
     @action(detail=False, methods=['get'], url_path='passenger/(?P<passenger_id>[^/.]+)')

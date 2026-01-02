@@ -113,15 +113,22 @@ class DispatchEngine:
         # Возвращаем кортеж для сортировки
         return (region_match, order_count, distance)
 
-    def get_candidates(self, order: Order) -> List[dict]:
+    def get_candidates(self, order: Order, include_offline: bool = True) -> List[dict]:
         """
         Возвращает список кандидатов с приоритетами
+        include_offline: если True, включает офлайн водителей для ручного назначения
         """
-        candidates = self._find_candidates(order)
+        seats_needed = order.seats_needed
         passenger = order.passenger
 
+        # Получаем водителей (онлайн и офлайн, если разрешено)
+        if include_offline:
+            drivers = Driver.objects.filter(capacity__gte=seats_needed)
+        else:
+            drivers = Driver.objects.filter(is_online=True, capacity__gte=seats_needed)
+
         result = []
-        for driver in candidates:
+        for driver in drivers:
             priority = self._calculate_priority(driver, order, passenger)
             result.append({
                 'driver_id': str(driver.id),
@@ -129,6 +136,7 @@ class DispatchEngine:
                 'region_id': driver.region.id,
                 'car_model': driver.car_model,
                 'capacity': driver.capacity,
+                'is_online': driver.is_online,
                 'priority': {
                     'region_match': priority[0] == 0,
                     'order_count': priority[1],
@@ -136,8 +144,9 @@ class DispatchEngine:
                 }
             })
 
-        # Сортируем по приоритету
+        # Сортируем по приоритету: сначала онлайн, потом по региону, количеству заказов и расстоянию
         result.sort(key=lambda x: (
+            not x['is_online'],  # Онлайн водители в начале
             not x['priority']['region_match'],
             x['priority']['order_count'],
             x['priority']['distance'] or float('inf')

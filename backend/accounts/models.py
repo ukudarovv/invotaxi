@@ -117,3 +117,52 @@ class Driver(models.Model):
             return (self.current_lat, self.current_lon)
         return None
 
+
+class UserActivityLog(models.Model):
+    """Модель для отслеживания действий пользователей"""
+    ACTION_TYPES = [
+        ('create', 'Создание'),
+        ('update', 'Обновление'),
+        ('delete', 'Удаление'),
+        ('block', 'Блокировка'),
+        ('unblock', 'Разблокировка'),
+        ('password_reset', 'Сброс пароля'),
+        ('role_change', 'Изменение роли'),
+        ('login', 'Вход в систему'),
+        ('logout', 'Выход из системы'),
+    ]
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='activity_logs',
+        verbose_name='Пользователь'
+    )
+    action_type = models.CharField(
+        max_length=20,
+        choices=ACTION_TYPES,
+        verbose_name='Тип действия'
+    )
+    description = models.TextField(verbose_name='Описание')
+    ip_address = models.GenericIPAddressField(null=True, blank=True, verbose_name='IP адрес')
+    performed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='performed_actions',
+        verbose_name='Выполнено пользователем'
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Создано')
+
+    class Meta:
+        verbose_name = 'Лог активности пользователя'
+        verbose_name_plural = 'Логи активности пользователей'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['action_type', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} - {self.get_action_type_display()} - {self.created_at}'

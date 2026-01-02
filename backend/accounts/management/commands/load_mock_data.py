@@ -2,8 +2,12 @@
 Management command для загрузки мок-данных из Flutter приложения
 """
 from django.core.management.base import BaseCommand
-from regions.models import Region
+from django.utils import timezone
+from datetime import timedelta
+from regions.models import Region, City
 from accounts.models import User, Passenger, Driver
+from orders.models import Order, OrderStatus, PricingConfig
+from orders.services import PriceCalculator
 
 
 class Command(BaseCommand):
@@ -12,13 +16,32 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write('Загрузка мок-данных...')
 
-        # Создаем регионы
+        # Создаем город Атырау
+        # Координаты Атырау: 55.7558, 37.6173 (центр города)
+        atyrau_city, city_created = City.objects.get_or_create(
+            id='atyrau',
+            defaults={
+                'title': 'Атырау',
+                'center_lat': 55.7558,
+                'center_lon': 37.6173
+            }
+        )
+        # Обновляем координаты города, если он уже существует
+        if not city_created:
+            atyrau_city.center_lat = 55.7558
+            atyrau_city.center_lon = 37.6173
+            atyrau_city.save()
+            self.stdout.write(f'Обновлены координаты города: {atyrau_city.title}')
+        else:
+            self.stdout.write(self.style.SUCCESS(f'Создан город: {atyrau_city.title}'))
+
+        # Создаем регионы для города Атырау
         regions_data = [
-            {'id': 'north', 'title': 'Северный', 'center_lat': 55.8000, 'center_lon': 37.6000},
-            {'id': 'south', 'title': 'Южный', 'center_lat': 55.6000, 'center_lon': 37.6000},
-            {'id': 'center', 'title': 'Центральный', 'center_lat': 55.7558, 'center_lon': 37.6173},
-            {'id': 'east', 'title': 'Восточный', 'center_lat': 55.7500, 'center_lon': 37.7000},
-            {'id': 'west', 'title': 'Западный', 'center_lat': 55.7500, 'center_lon': 37.5000},
+            {'id': 'atyrau_center', 'title': 'Центральный район', 'center_lat': 55.7558, 'center_lon': 37.6173},
+            {'id': 'atyrau_north', 'title': 'Северный район', 'center_lat': 55.8, 'center_lon': 37.6},
+            {'id': 'atyrau_south', 'title': 'Южный район', 'center_lat': 55.6, 'center_lon': 37.6},
+            {'id': 'atyrau_east', 'title': 'Восточный район', 'center_lat': 55.75, 'center_lon': 37.7},
+            {'id': 'atyrau_west', 'title': 'Западный район', 'center_lat': 55.75, 'center_lon': 37.5},
         ]
 
         regions_dict = {}
@@ -27,6 +50,7 @@ class Command(BaseCommand):
                 id=region_data['id'],
                 defaults={
                     'title': region_data['title'],
+                    'city': atyrau_city,
                     'center_lat': region_data['center_lat'],
                     'center_lon': region_data['center_lon']
                 }
@@ -95,7 +119,7 @@ class Command(BaseCommand):
             user=test_user,
             defaults={
                 'full_name': 'Тестов Тест Тестович',
-                'region': regions_dict['north'],
+                'region': regions_dict['atyrau_center'],
                 'disability_category': 'I группа',
                 'allowed_companion': True
             }
@@ -130,6 +154,82 @@ class Command(BaseCommand):
 
             if created and i % 10 == 0:
                 self.stdout.write(f'Создано пассажиров: {i}')
+
+        # Создаем конфигурацию ценообразования для Атырау
+        pricing_config, _ = PricingConfig.objects.get_or_create(
+            region=None,  # Общая конфигурация
+            defaults={
+                'price_per_km': 50.00,
+                'price_per_minute_waiting': 10.00,
+                'minimum_fare': 200.00,
+                'companion_fee': 100.00,
+                'disability_category_multiplier': {
+                    'I группа': 1.0,
+                    'II группа': 1.0,
+                    'III группа': 1.0,
+                    'Ребенок-инвалид': 0.8
+                },
+                'night_time_multiplier': 1.2,
+                'weekend_multiplier': 1.1,
+                'is_active': True
+            }
+        )
+        self.stdout.write(self.style.SUCCESS('Создана конфигурация ценообразования'))
+
+        # Создаем тестовые заказы с адресами в Атырау
+        atyrau_addresses = [
+            {'pickup': 'ул. Сатпаева, 1', 'pickup_lat': 47.1067, 'pickup_lon': 51.9167, 'dropoff': 'пр. Азаттык, 45', 'dropoff_lat': 47.1100, 'dropoff_lon': 51.9200},
+            {'pickup': 'мкр. Привокзальный, д. 12', 'pickup_lat': 47.1000, 'pickup_lon': 51.9100, 'dropoff': 'ул. Бейбитшилик, 78', 'dropoff_lat': 47.1150, 'dropoff_lon': 51.9250},
+            {'pickup': 'пр. Абая, 123', 'pickup_lat': 47.1050, 'pickup_lon': 51.9150, 'dropoff': 'ул. Курмангазы, 56', 'dropoff_lat': 47.1080, 'dropoff_lon': 51.9180},
+            {'pickup': 'мкр. Жилой массив, д. 34', 'pickup_lat': 47.1200, 'pickup_lon': 51.9300, 'dropoff': 'ул. Махамбета, 90', 'dropoff_lat': 47.1020, 'dropoff_lon': 51.9120},
+            {'pickup': 'пр. Нефтяников, 67', 'pickup_lat': 47.0950, 'pickup_lon': 51.9050, 'dropoff': 'ул. Айтеке би, 23', 'dropoff_lat': 47.1120, 'dropoff_lon': 51.9220},
+        ]
+
+        # Получаем первых 5 пассажиров для создания заказов
+        passengers_list = list(Passenger.objects.all()[:5])
+        drivers_list = list(Driver.objects.filter(is_online=True)[:5])
+
+        for i, addr in enumerate(atyrau_addresses):
+            if i < len(passengers_list):
+                passenger = passengers_list[i]
+                driver = drivers_list[i] if i < len(drivers_list) else None
+                
+                import time
+                order_id = f'order_atyrau_{int(time.time() * 1000) + i}'
+                
+                order, created = Order.objects.get_or_create(
+                    id=order_id,
+                    defaults={
+                        'passenger': passenger,
+                        'driver': driver,
+                        'pickup_title': addr['pickup'],
+                        'dropoff_title': addr['dropoff'],
+                        'pickup_lat': addr['pickup_lat'],
+                        'pickup_lon': addr['pickup_lon'],
+                        'dropoff_lat': addr['dropoff_lat'],
+                        'dropoff_lon': addr['dropoff_lon'],
+                        'desired_pickup_time': timezone.now() + timedelta(hours=i+1),
+                        'has_companion': passenger.allowed_companion,
+                        'status': OrderStatus.ASSIGNED if driver else OrderStatus.ACTIVE_QUEUE,
+                        'assigned_at': timezone.now() if driver else None,
+                    }
+                )
+                
+                if created:
+                    # Рассчитываем цену
+                    price_data = PriceCalculator.calculate_estimated_price(order)
+                    order.distance_km = price_data['distance_km']
+                    order.waiting_time_minutes = price_data['waiting_time_minutes']
+                    order.estimated_price = price_data['estimated_price']
+                    order.price_breakdown = price_data['price_breakdown']
+                    
+                    # Если заказ завершен, рассчитываем финальную цену
+                    if order.status == OrderStatus.COMPLETED:
+                        final_price_data = PriceCalculator.calculate_final_price(order)
+                        order.final_price = final_price_data['final_price']
+                    
+                    order.save()
+                    self.stdout.write(self.style.SUCCESS(f'Создан заказ: {order.id}'))
 
         self.stdout.write(self.style.SUCCESS('Мок-данные успешно загружены!'))
 

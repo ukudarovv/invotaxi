@@ -149,6 +149,8 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
@@ -172,12 +174,21 @@ SIMPLE_JWT = {
 # Для разработки разрешаем все localhost порты
 if DEBUG:
     # В режиме разработки разрешаем все localhost порты
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ]
+    # Также разрешаем через регулярные выражения для других портов
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^http://localhost:\d+$",
         r"^http://127\.0\.0\.1:\d+$",
     ]
-    # Альтернативный вариант - разрешить все для разработки (менее безопасно)
-    # CORS_ALLOW_ALL_ORIGINS = True
+    # Для разработки можно разрешить все источники (раскомментировать если нужно)
+    CORS_ALLOW_ALL_ORIGINS = True
 else:
     # В продакшене используем конкретные домены
     CORS_ALLOWED_ORIGINS = [

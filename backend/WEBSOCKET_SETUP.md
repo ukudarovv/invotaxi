@@ -73,7 +73,27 @@ curl http://localhost:8000/api/websocket/health/
 - Статус WebSocket routing
 - Рекомендации по исправлению проблем
 
-### Диагностический скрипт
+### Диагностические скрипты
+
+#### Проверка типа сервера
+
+Используйте скрипт для проверки, запущен ли сервер через daphne:
+
+```bash
+cd backend
+venv\Scripts\activate.bat  # Windows
+# или
+source venv/bin/activate  # Linux/Mac
+
+python check_server_type.py
+```
+
+Скрипт покажет:
+- Тип сервера (daphne/runserver/unknown)
+- Статус конфигурации WebSocket
+- Рекомендации по исправлению проблем
+
+#### Тестирование WebSocket подключения
 
 Используйте встроенный скрипт для тестирования WebSocket:
 
@@ -119,7 +139,19 @@ python test_websocket.py http://localhost:8000 YOUR_JWT_TOKEN
 
 - **НЕ используйте** `python manage.py runserver` для WebSocket
 - **Используйте** `daphne` для запуска сервера с поддержкой WebSocket
+- **Запускайте ТОЛЬКО один сервер** - daphne обрабатывает И HTTP, И WebSocket на одном порту (8000)
+- **НЕ запускайте** runserver и daphne одновременно - это вызовет конфликты
 - После установки daphne, перезапустите сервер
+
+### Архитектура
+
+Daphne обрабатывает оба протокола на одном порту:
+- HTTP запросы → `http://localhost:8000/api/...`
+- WebSocket соединения → `ws://localhost:8000/ws/...`
+
+ProtocolTypeRouter в `asgi.py` автоматически определяет тип соединения и направляет его в правильный обработчик.
+
+Подробнее см. `WEBSOCKET_ARCHITECTURE.md`
 
 ## Устранение неполадок
 

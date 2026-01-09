@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { Search, Filter, Plus, Eye, Edit, X, Check, UserCircle, Car as CarIcon, Phone, Loader2, ArrowUpDown, ArrowUp, ArrowDown, MapPin } from "lucide-react";
+import { Search, Filter, Plus, Eye, Edit, X, Check, UserCircle, Car as CarIcon, Phone, Loader2, ArrowUpDown, ArrowUp, ArrowDown, MapPin, Sparkles } from "lucide-react";
 import { Modal } from "./Modal";
 import { ordersApi, Order } from "../services/orders";
 import { passengersApi, Passenger } from "../services/passengers";
 import { dispatchApi } from "../services/dispatch";
 import { format } from "date-fns";
 import { RouteMapPicker } from "./RouteMapPicker";
+import { RouteMapView } from "./RouteMapView";
 import { toast } from "sonner";
 
 const statuses = ["Все", "Ожидание", "В пути", "Выполнено", "Отменён"];
@@ -67,6 +68,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   const [orderNote, setOrderNote] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
+  const [generateModal, setGenerateModal] = useState(false);
+  const [generatingOrders, setGeneratingOrders] = useState(false);
+  const [ordersCount, setOrdersCount] = useState(5);
 
   // Load orders from API
   useEffect(() => {
@@ -350,6 +354,139 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     }
   };
 
+  // Generate random coordinates within city bounds (Атырау)
+  const generateRandomCoordinates = () => {
+    // Центр Атырау: 47.10869114222083, 51.9049072265625
+    // Генерируем координаты в радиусе примерно 10 км от центра
+    const centerLat = 47.10869114222083;
+    const centerLon = 51.9049072265625;
+    const radiusKm = 10;
+    
+    // Примерно 1 градус широты = 111 км
+    // Примерно 1 градус долготы на этой широте ≈ 75 км
+    const latOffset = (Math.random() * 2 - 1) * (radiusKm / 111);
+    const lonOffset = (Math.random() * 2 - 1) * (radiusKm / 75);
+    
+    return {
+      lat: centerLat + latOffset,
+      lon: centerLon + lonOffset
+    };
+  };
+
+  // Generate random address
+  const generateRandomAddress = () => {
+    const streets = [
+      'ул. Абая',
+      'ул. Сатпаева',
+      'пр. Азаттык',
+      'ул. Байтурсынова',
+      'ул. Жамбыла',
+      'пр. Назарбаева',
+      'ул. Казыбек би',
+      'ул. Муканова',
+      'ул. Пушкина',
+      'ул. Ленина',
+      'ул. Гагарина',
+      'ул. Мира',
+      'ул. Центральная',
+      'ул. Новая',
+      'ул. Советская',
+      'ул. Ауэзова',
+      'ул. Достык',
+      'ул. Курмангазы',
+      'пр. Республики',
+      'ул. Шевченко'
+    ];
+    
+    const street = streets[Math.floor(Math.random() * streets.length)];
+    const building = Math.floor(Math.random() * 200) + 1;
+    
+    return `${street}, ${building}`;
+  };
+
+  // Generate test orders from random passengers
+  const handleGenerateTestOrders = async () => {
+    if (passengers.length === 0) {
+      toast.error("Нет доступных пассажиров для создания заказов");
+      return;
+    }
+
+    if (ordersCount < 1 || ordersCount > 50) {
+      toast.error("Количество заказов должно быть от 1 до 50");
+      return;
+    }
+
+    try {
+      setGeneratingOrders(true);
+      setError(null);
+
+      const createdOrders: string[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < ordersCount; i++) {
+        try {
+          // Выбираем случайного пассажира
+          const randomPassenger = passengers[Math.floor(Math.random() * passengers.length)];
+          
+          // Генерируем координаты для отправления и назначения
+          const pickupCoords = generateRandomCoordinates();
+          const dropoffCoords = generateRandomCoordinates();
+          
+          // Генерируем адреса
+          const pickupTitle = generateRandomAddress();
+          const dropoffTitle = generateRandomAddress();
+          
+          // Генерируем случайное время в ближайшие 2 часа
+          const desiredPickupTime = new Date();
+          desiredPickupTime.setHours(desiredPickupTime.getHours() + Math.floor(Math.random() * 2) + 1);
+          desiredPickupTime.setMinutes(Math.floor(Math.random() * 60));
+          
+          const orderData = {
+            pickup_title: pickupTitle,
+            dropoff_title: dropoffTitle,
+            pickup_lat: pickupCoords.lat,
+            pickup_lon: pickupCoords.lon,
+            dropoff_lat: dropoffCoords.lat,
+            dropoff_lon: dropoffCoords.lon,
+            desired_pickup_time: desiredPickupTime.toISOString(),
+            passenger_id: randomPassenger.id,
+            note: `Тестовый заказ #${i + 1}`,
+            has_companion: Math.random() > 0.7, // 30% вероятность сопровождения
+          };
+
+          const newOrder = await ordersApi.createOrder(orderData);
+          createdOrders.push(newOrder.id);
+          
+          // Небольшая задержка между запросами, чтобы не перегружать сервер
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (err: any) {
+          errors.push(`Заказ #${i + 1}: ${err.message || "Ошибка создания"}`);
+        }
+      }
+
+      // Обновляем список заказов
+      await refreshOrders();
+      
+      // Показываем результат
+      if (createdOrders.length > 0) {
+        toast.success(`Успешно создано ${createdOrders.length} из ${ordersCount} заказов`);
+      }
+      if (errors.length > 0) {
+        toast.error(`Ошибки при создании ${errors.length} заказов`);
+        console.error("Ошибки создания заказов:", errors);
+      }
+      
+      setGenerateModal(false);
+      setOrdersCount(5);
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || err.message || "Ошибка генерации заказов";
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setGeneratingOrders(false);
+    }
+  };
+
   // Handle driver assignment
   const handleAssignDriver = async () => {
     if (!assignModal || !selectedDriverId) {
@@ -468,13 +605,22 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           <h1 className="text-3xl dark:text-white">Управление заказами</h1>
           <p className="text-gray-600 dark:text-gray-400">Просмотр и управление всеми заказами</p>
         </div>
-        <button 
-          onClick={() => setCreateModal(true)}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
-        >
-          <Plus className="w-5 h-5" />
-          Создать заказ
-        </button>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setGenerateModal(true)}
+            className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
+          >
+            <Sparkles className="w-5 h-5" />
+            Генерировать заказы
+          </button>
+          <button 
+            onClick={() => setCreateModal(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
+          >
+            <Plus className="w-5 h-5" />
+            Создать заказ
+          </button>
+        </div>
       </div>
 
       {/* Navigation Alert */}
@@ -733,11 +879,11 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">ID заказа</p>
-                <p className="text-lg dark:text-white">{selectedOrder.id}</p>
+                <p className="text-lg dark:text-white font-mono">{selectedOrder.id}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Статус</p>
-                <span className={`inline-block px-3 py-1 rounded-full text-xs ${getStatusColor(selectedOrder.status)}`}>
+                <span className={`inline-block px-3 py-1 rounded-full text-xs ${getStatusColor(selectedOrder.order.status)}`}>
                   {selectedOrder.status}
                 </span>
               </div>
@@ -745,23 +891,54 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
 
             <div>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Пассажир</p>
-              <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <UserCircle className="w-10 h-10 text-gray-400" />
-                <div>
-                  <p className="dark:text-white">{selectedOrder.passenger}</p>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">+7 777 123 4567</p>
+              <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-2">
+                <div className="flex items-center gap-3">
+                  <UserCircle className="w-10 h-10 text-gray-400" />
+                  <div className="flex-1">
+                    <p className="dark:text-white font-medium">{selectedOrder.order.passenger.full_name}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.passenger.user.phone}</p>
+                    {selectedOrder.order.passenger.user.email && (
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.passenger.user.email}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                  {selectedOrder.order.passenger.region && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Регион</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.passenger.region.title}</p>
+                    </div>
+                  )}
+                  {selectedOrder.order.passenger.disability_category && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Категория</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.passenger.disability_category}</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
-            {selectedOrder.driver !== "Неназначен" && (
+            {selectedOrder.driver !== "Неназначен" && selectedOrder.order.driver && (
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Водитель</p>
-                <div className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <CarIcon className="w-10 h-10 text-gray-400" />
-                  <div>
-                    <p className="dark:text-white">{selectedOrder.driver}</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.driver?.user.phone || ""}</p>
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-2">
+                  <div className="flex items-center gap-3">
+                    <CarIcon className="w-10 h-10 text-gray-400" />
+                    <div className="flex-1">
+                      <p className="dark:text-white font-medium">{selectedOrder.order.driver.name}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.driver.user.phone}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Машина</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.driver.car_model}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Гос. номер</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.driver.plate_number}</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -769,34 +946,191 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
 
             <div>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Маршрут</p>
-              <div className="space-y-2">
-                <div className="flex items-start gap-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                  <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs">A</div>
-                  <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Откуда</p>
-                    <p className="dark:text-white">{selectedOrder.from}</p>
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-start gap-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                    <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs">A</div>
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Откуда</p>
+                      <p className="dark:text-white">{selectedOrder.from}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center text-white text-xs">B</div>
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Куда</p>
+                      <p className="dark:text-white">{selectedOrder.to}</p>
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                  <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center text-white text-xs">B</div>
-                  <div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Куда</p>
-                    <p className="dark:text-white">{selectedOrder.to}</p>
-                  </div>
-                </div>
+                
+                {/* Мини-карта с маршрутом */}
+                {selectedOrder.order.pickup_lat && selectedOrder.order.pickup_lon && 
+                 selectedOrder.order.dropoff_lat && selectedOrder.order.dropoff_lon && (
+                  <RouteMapView
+                    pickupLat={selectedOrder.order.pickup_lat}
+                    pickupLon={selectedOrder.order.pickup_lon}
+                    dropoffLat={selectedOrder.order.dropoff_lat}
+                    dropoffLon={selectedOrder.order.dropoff_lon}
+                    pickupTitle={selectedOrder.from}
+                    dropoffTitle={selectedOrder.to}
+                    distanceKm={selectedOrder.order.distance_km}
+                    orderId={selectedOrder.id}
+                    height="250px"
+                  />
+                )}
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Дата и время</p>
-                <p className="dark:text-white">{selectedOrder.date} в {selectedOrder.time}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Желаемое время забора</p>
+                <p className="dark:text-white">
+                  {new Date(selectedOrder.order.desired_pickup_time).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </p>
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Расстояние</p>
                 <p className="dark:text-white">{selectedOrder.order.distance_km ? `${selectedOrder.order.distance_km.toFixed(2)} км` : "—"}</p>
               </div>
             </div>
+
+            {/* Дополнительная информация */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Создан</p>
+                <p className="dark:text-white">
+                  {new Date(selectedOrder.order.created_at).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </p>
+              </div>
+              {selectedOrder.order.assigned_at && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Назначен</p>
+                  <p className="dark:text-white">
+                    {new Date(selectedOrder.order.assigned_at).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                </div>
+              )}
+              {selectedOrder.order.completed_at && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Завершен</p>
+                  <p className="dark:text-white">
+                    {new Date(selectedOrder.order.completed_at).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                </div>
+              )}
+              {selectedOrder.order.waiting_time_minutes && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Время ожидания</p>
+                  <p className="dark:text-white">{selectedOrder.order.waiting_time_minutes} мин</p>
+                </div>
+              )}
+            </div>
+
+            {/* Особенности заказа */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Особенности</p>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {selectedOrder.order.has_companion && (
+                    <span className="inline-block px-2 py-1 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 rounded text-xs">
+                      С сопровождением
+                    </span>
+                  )}
+                  {selectedOrder.order.video_recording && (
+                    <span className="inline-block px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs">
+                      Видеозапись
+                    </span>
+                  )}
+                  {selectedOrder.order.seats_needed > 1 && (
+                    <span className="inline-block px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded text-xs">
+                      Мест: {selectedOrder.order.seats_needed}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Координаты</p>
+                <div className="text-xs dark:text-gray-300 mt-1">
+                  <p>Откуда: {selectedOrder.order.pickup_lat.toFixed(6)}, {selectedOrder.order.pickup_lon.toFixed(6)}</p>
+                  <p>Куда: {selectedOrder.order.dropoff_lat.toFixed(6)}, {selectedOrder.order.dropoff_lon.toFixed(6)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Примечание */}
+            {selectedOrder.order.note && (
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Примечание</p>
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <p className="text-sm dark:text-white">{selectedOrder.order.note}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Причины */}
+            {(selectedOrder.order.assignment_reason || selectedOrder.order.rejection_reason) && (
+              <div className="space-y-2">
+                {selectedOrder.order.assignment_reason && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Причина назначения</p>
+                    <p className="text-sm dark:text-white p-2 bg-green-50 dark:bg-green-900/20 rounded">{selectedOrder.order.assignment_reason}</p>
+                  </div>
+                )}
+                {selectedOrder.order.rejection_reason && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Причина отклонения</p>
+                    <p className="text-sm dark:text-white p-2 bg-red-50 dark:bg-red-900/20 rounded">{selectedOrder.order.rejection_reason}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Цена */}
+            {(selectedOrder.order.final_price || selectedOrder.order.estimated_price) && (
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {selectedOrder.order.final_price ? "Финальная стоимость" : "Предварительная стоимость"}
+                    </p>
+                    <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">
+                      {(selectedOrder.order.final_price || selectedOrder.order.estimated_price || 0).toFixed(2)} ₸
+                    </p>
+                  </div>
+                  {selectedOrder.order.final_price && selectedOrder.order.estimated_price && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Было оценено</p>
+                      <p className="text-sm line-through text-gray-400">{selectedOrder.order.estimated_price.toFixed(2)} ₸</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Детализация цены */}
             {selectedOrder.order.price_breakdown && (
@@ -805,48 +1139,58 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-gray-600 dark:text-gray-400">Расстояние ({selectedOrder.order.distance_km?.toFixed(2) || 0} км)</span>
-                    <span className="dark:text-white">{selectedOrder.order.price_breakdown.base_distance_price.toFixed(2)} ₸</span>
+                    <span className="dark:text-white">{selectedOrder.order.price_breakdown.base_distance_price?.toFixed(2) || "0.00"} ₸</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Ожидание ({selectedOrder.order.waiting_time_minutes || 0} мин)</span>
-                    <span className="dark:text-white">{selectedOrder.order.price_breakdown.waiting_time_price.toFixed(2)} ₸</span>
-                  </div>
-                  {selectedOrder.order.has_companion && (
+                  {selectedOrder.order.price_breakdown.waiting_time_price > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600 dark:text-gray-400">Доплата за сопровождение</span>
-                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.companion_fee.toFixed(2)} ₸</span>
+                      <span className="text-gray-600 dark:text-gray-400">Ожидание ({selectedOrder.order.waiting_time_minutes || 0} мин)</span>
+                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.waiting_time_price?.toFixed(2) || "0.00"} ₸</span>
                     </div>
                   )}
-                  {selectedOrder.order.price_breakdown.disability_multiplier !== 1.0 && (
+                  {selectedOrder.order.has_companion && selectedOrder.order.price_breakdown.companion_fee > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Доплата за сопровождение</span>
+                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.companion_fee?.toFixed(2) || "0.00"} ₸</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.disability_multiplier && selectedOrder.order.price_breakdown.disability_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Множитель категории</span>
                       <span className="dark:text-white">×{selectedOrder.order.price_breakdown.disability_multiplier.toFixed(2)}</span>
                     </div>
                   )}
-                  {selectedOrder.order.price_breakdown.night_multiplier !== 1.0 && (
+                  {selectedOrder.order.price_breakdown.night_multiplier && selectedOrder.order.price_breakdown.night_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Ночной тариф</span>
                       <span className="dark:text-white">×{selectedOrder.order.price_breakdown.night_multiplier.toFixed(2)}</span>
                     </div>
                   )}
-                  {selectedOrder.order.price_breakdown.weekend_multiplier !== 1.0 && (
+                  {selectedOrder.order.price_breakdown.weekend_multiplier && selectedOrder.order.price_breakdown.weekend_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Выходной день</span>
                       <span className="dark:text-white">×{selectedOrder.order.price_breakdown.weekend_multiplier.toFixed(2)}</span>
                     </div>
                   )}
-                  {selectedOrder.order.price_breakdown.minimum_fare_adjustment > 0 && (
+                  {selectedOrder.order.price_breakdown.minimum_fare_adjustment && selectedOrder.order.price_breakdown.minimum_fare_adjustment > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Минимальная стоимость</span>
                       <span className="dark:text-white">+{selectedOrder.order.price_breakdown.minimum_fare_adjustment.toFixed(2)} ₸</span>
                     </div>
                   )}
+                  {selectedOrder.order.price_breakdown.subtotal && (
+                    <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <span className="text-gray-600 dark:text-gray-400">Промежуточный итог</span>
+                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.subtotal.toFixed(2)} ₸</span>
+                    </div>
+                  )}
                   <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700 font-semibold">
                     <span className="text-gray-900 dark:text-white">Итого</span>
                     <span className="text-xl text-green-600 dark:text-green-400">
-                      {selectedOrder.order.final_price || selectedOrder.order.estimated_price ? 
-                        `${(selectedOrder.order.final_price || selectedOrder.order.estimated_price || 0).toFixed(2)} ₸` : 
-                        "—"}
+                      {selectedOrder.order.price_breakdown.total ? 
+                        `${selectedOrder.order.price_breakdown.total.toFixed(2)} ₸` : 
+                        (selectedOrder.order.final_price || selectedOrder.order.estimated_price ? 
+                          `${(selectedOrder.order.final_price || selectedOrder.order.estimated_price || 0).toFixed(2)} ₸` : 
+                          "—")}
                     </span>
                   </div>
                 </div>
@@ -1323,6 +1667,105 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
             />
           </div>
+        </div>
+      </Modal>
+
+      {/* Generate Test Orders Modal */}
+      <Modal
+        isOpen={generateModal}
+        onClose={() => {
+          setGenerateModal(false);
+          setOrdersCount(5);
+        }}
+        title="Генерация тестовых заказов"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setGenerateModal(false);
+                setOrdersCount(5);
+              }}
+              disabled={generatingOrders}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleGenerateTestOrders}
+              disabled={generatingOrders || passengers.length === 0}
+              className={`px-6 py-2.5 rounded-lg flex items-center gap-2 transition-colors ${
+                generatingOrders || passengers.length === 0
+                  ? "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                  : "bg-purple-600 text-white hover:bg-purple-700"
+              }`}
+            >
+              {generatingOrders ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Генерация...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-5 h-5" />
+                  Создать заказы
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {error && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          )}
+
+          {passengers.length === 0 ? (
+            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                ⚠️ Нет доступных пассажиров в базе данных. Сначала создайте пассажиров.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <p className="text-sm text-blue-800 dark:text-blue-300">
+                  💡 <strong>Информация:</strong> Будет создано {ordersCount} тестовых заказов от случайных пассажиров из базы данных. 
+                  Для каждого заказа будут сгенерированы случайные адреса и координаты в пределах города Атырау.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                  Количество заказов для генерации
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={ordersCount}
+                  onChange={(e) => setOrdersCount(parseInt(e.target.value) || 1)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Доступно пассажиров: {passengers.length}
+                </p>
+              </div>
+
+              <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                <p className="font-medium dark:text-gray-300">Что будет сгенерировано:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Случайные пассажиры из базы данных</li>
+                  <li>Случайные адреса отправления и назначения</li>
+                  <li>Случайные координаты в пределах города</li>
+                  <li>Время забора в ближайшие 2 часа</li>
+                  <li>30% вероятность сопровождения</li>
+                </ul>
+              </div>
+            </>
+          )}
         </div>
       </Modal>
     </div>

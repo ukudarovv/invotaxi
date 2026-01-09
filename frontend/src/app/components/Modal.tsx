@@ -61,18 +61,18 @@ export function Modal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto animate-fadeIn">
+    <div className="fixed inset-0 z-[1000] overflow-y-auto animate-fadeIn">
       <div className="flex min-h-screen items-center justify-center p-4">
         {/* Backdrop with blur */}
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-all duration-300"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-all duration-300 z-[1001]"
           onClick={handleBackdropClick}
           aria-hidden="true"
         />
 
         {/* Modal */}
         <div
-          className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl ${sizeClasses[size]} w-full animate-slideUp transform transition-all duration-300`}
+          className={`relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl ${sizeClasses[size]} w-full animate-slideUp transform transition-all duration-300 z-[1002]`}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}

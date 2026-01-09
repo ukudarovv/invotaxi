@@ -139,3 +139,32 @@ body,
 .animate-slideDown {
   animation: slideDown 0.2s ease-in;
 }
+
+/* Fix for Leaflet map z-index inside modals */
+.leaflet-map-container .leaflet-container,
+.leaflet-map-container .leaflet-pane,
+.leaflet-map-container .leaflet-map-pane,
+.leaflet-map-container .leaflet-tile-pane,
+.leaflet-map-container .leaflet-overlay-pane,
+.leaflet-map-container .leaflet-shadow-pane,
+.leaflet-map-container .leaflet-marker-pane,
+.leaflet-map-container .leaflet-tooltip-pane,
+.leaflet-map-container .leaflet-popup-pane {
+  z-index: auto !important;
+}
+
+.leaflet-map-container .leaflet-control-container {
+  z-index: 1003 !important;
+}
+
+.leaflet-map-container .leaflet-control {
+  z-index: 1003 !important;
+}
+
+.leaflet-map-container .leaflet-popup {
+  z-index: 1004 !important;
+}
+
+.leaflet-map-container .leaflet-tooltip {
+  z-index: 1005 !important;
+}

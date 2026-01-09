@@ -84,6 +84,24 @@ export interface MapDataResponse {
   orders_count: number;
 }
 
+export interface RouteResponse {
+  route: Array<[number, number]>;
+  distance_m: number;
+  distance_km: number;
+  duration_seconds: number;
+  duration_minutes: number;
+  eta: string;
+}
+
+export interface ETAResponse {
+  eta: string;
+  eta_timestamp: number;
+  distance_m: number;
+  distance_km: number;
+  duration_minutes: number;
+  duration_seconds: number;
+}
+
 export const dispatchApi = {
   /**
    * Получить кандидатов для заказа
@@ -114,6 +132,40 @@ export const dispatchApi = {
    */
   async getMapData(): Promise<MapDataResponse> {
     const response = await api.get<MapDataResponse>('/dispatch/map-data/');
+    return response.data;
+  },
+
+  /**
+   * Получить маршрут между двумя точками
+   */
+  async getRoute(lat1: number, lon1: number, lat2: number, lon2: number): Promise<RouteResponse> {
+    const response = await api.get<RouteResponse>('/dispatch/route/', {
+      params: { lat1, lon1, lat2, lon2 }
+    });
+    return response.data;
+  },
+
+  /**
+   * Получить маршрут водителя до активного заказа
+   */
+  async getDriverRoute(driverId: string): Promise<RouteResponse & { order_id: string }> {
+    const response = await api.get<RouteResponse & { order_id: string }>(`/dispatch/driver-route/${driverId}/`);
+    return response.data;
+  },
+
+  /**
+   * Получить маршрут заказа (от точки забора до точки высадки)
+   */
+  async getOrderRoute(orderId: string): Promise<RouteResponse> {
+    const response = await api.get<RouteResponse>(`/dispatch/order-route/${orderId}/`);
+    return response.data;
+  },
+
+  /**
+   * Получить расчетное время прибытия (ETA) водителя к заказу
+   */
+  async getETA(driverId: string, orderId: string): Promise<ETAResponse> {
+    const response = await api.get<ETAResponse>(`/dispatch/eta/${driverId}/${orderId}/`);
     return response.data;
   },
 };

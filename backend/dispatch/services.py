@@ -1,9 +1,14 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from django.utils import timezone
-from datetime import date
+from datetime import date, timedelta
 from orders.models import Order, OrderStatus
 from accounts.models import Driver
 from geo.services import Geo
+import logging
+import requests
+import json
+
+logger = logging.getLogger(__name__)
 
 
 class AssignmentResult:
@@ -159,3 +164,151 @@ class DispatchEngine:
         self._driver_order_counts.clear()
         self._last_reset_date = date.today()
 
+    def calculate_route(self, lat1: float, lon1: float, lat2: float, lon2: float) -> Dict:
+        """
+        Вычисляет маршрут между двумя точками по дорогам используя OSRM API
+        Возвращает словарь с координатами маршрута, расстоянием и временем в пути
+        """
+        # Список OSRM серверов для попытки подключения
+        osrm_servers = [
+            "http://router.project-osrm.org",  # Публичный OSRM сервер
+            "https://router.project-osrm.org",  # HTTPS версия
+        ]
+        
+        for server_url in osrm_servers:
+            try:
+                # Формат: lon,lat (OSRM использует обратный порядок координат)
+                url = f"{server_url}/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+                params = {
+                    'overview': 'full',  # Полный обзор маршрута со всеми точками
+                    'geometries': 'geojson',  # Формат GeoJSON для координат
+                    'steps': 'false'  # Не нужны пошаговые инструкции
+                }
+                
+                response = requests.get(url, params=params, timeout=5)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    if data.get('code') == 'Ok' and len(data.get('routes', [])) > 0:
+                        route = data['routes'][0]
+                        geometry = route.get('geometry', {})
+                        coordinates = geometry.get('coordinates', [])
+                        
+                        if not coordinates or len(coordinates) == 0:
+                            continue  # Пробуем следующий сервер
+                        
+                        # Преобразуем координаты из [lon, lat] в [lat, lon]
+                        route_points = [[coord[1], coord[0]] for coord in coordinates]
+                        
+                        # Расстояние в метрах
+                        distance_m = int(route.get('distance', 0))
+                        # Время в секундах
+                        duration_seconds = int(route.get('duration', 0))
+                        
+                        logger.info(f"Маршрут успешно рассчитан через OSRM: {distance_m}м, {duration_seconds}с")
+                        
+                        return {
+                            'route': route_points,
+                            'distance_m': distance_m,
+                            'distance_km': round(distance_m / 1000.0, 2),
+                            'duration_seconds': duration_seconds,
+                            'duration_minutes': int(duration_seconds / 60),
+                            'eta': timezone.now() + timedelta(seconds=duration_seconds)
+                        }
+                    elif data.get('code') == 'NoRoute':
+                        logger.warning(f"OSRM не нашел маршрут между точками {lat1},{lon1} -> {lat2},{lon2}")
+                        break  # Не пробуем другие серверы, если маршрут не найден
+                        
+            except requests.exceptions.Timeout:
+                logger.warning(f"Таймаут при подключении к OSRM серверу {server_url}")
+                continue  # Пробуем следующий сервер
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Ошибка подключения к OSRM серверу {server_url}: {e}")
+                continue  # Пробуем следующий сервер
+            except Exception as e:
+                logger.error(f"Неожиданная ошибка при расчете маршрута через OSRM ({server_url}): {e}")
+                continue  # Пробуем следующий сервер
+        
+        # Если все серверы недоступны, используем fallback на прямую линию
+        logger.warning(f"Все OSRM серверы недоступны, используем прямую линию для маршрута {lat1},{lon1} -> {lat2},{lon2}")
+        return self._calculate_straight_line_route(lat1, lon1, lat2, lon2)
+    
+    def _calculate_straight_line_route(self, lat1: float, lon1: float, lat2: float, lon2: float) -> Dict:
+        """
+        Вычисляет прямую линию между двумя точками (fallback метод)
+        """
+        distance_m = Geo.calculate_distance(lat1, lon1, lat2, lon2)
+        
+        # Приблизительная скорость движения в городе (км/ч)
+        AVERAGE_SPEED_KMH = 40.0
+        AVERAGE_SPEED_MS = AVERAGE_SPEED_KMH / 3.6  # м/с
+        
+        # Время в пути в секундах
+        duration_seconds = distance_m / AVERAGE_SPEED_MS if AVERAGE_SPEED_MS > 0 else 0
+        
+        # Генерируем промежуточные точки для визуализации маршрута
+        num_points = max(10, int(distance_m / 100))  # Одна точка каждые 100 метров, минимум 10
+        route_points = []
+        
+        for i in range(num_points + 1):
+            ratio = i / num_points if num_points > 0 else 0
+            lat = lat1 + (lat2 - lat1) * ratio
+            lon = lon1 + (lon2 - lon1) * ratio
+            route_points.append([lat, lon])
+        
+        return {
+            'route': route_points,
+            'distance_m': int(distance_m),
+            'distance_km': round(distance_m / 1000.0, 2),
+            'duration_seconds': int(duration_seconds),
+            'duration_minutes': int(duration_seconds / 60),
+            'eta': timezone.now() + timedelta(seconds=int(duration_seconds))
+        }
+
+    def calculate_driver_route(self, driver: Driver, order: Order) -> Optional[Dict]:
+        """
+        Вычисляет маршрут от водителя до точки забора заказа
+        """
+        if not driver.current_lat or not driver.current_lon:
+            return None
+        
+        if not order.pickup_lat or not order.pickup_lon:
+            return None
+        
+        return self.calculate_route(
+            driver.current_lat, driver.current_lon,
+            order.pickup_lat, order.pickup_lon
+        )
+
+    def calculate_order_route(self, order: Order) -> Optional[Dict]:
+        """
+        Вычисляет маршрут от точки забора до точки высадки заказа
+        """
+        if not order.pickup_lat or not order.pickup_lon:
+            return None
+        
+        if not order.dropoff_lat or not order.dropoff_lon:
+            return None
+        
+        return self.calculate_route(
+            order.pickup_lat, order.pickup_lon,
+            order.dropoff_lat, order.dropoff_lon
+        )
+
+    def calculate_eta(self, driver: Driver, order: Order) -> Optional[Dict]:
+        """
+        Вычисляет расчетное время прибытия (ETA) водителя к точке забора
+        """
+        route = self.calculate_driver_route(driver, order)
+        if not route:
+            return None
+        
+        return {
+            'eta': route['eta'].isoformat(),
+            'eta_timestamp': route['eta'].timestamp(),
+            'distance_m': route['distance_m'],
+            'distance_km': route['distance_km'],
+            'duration_minutes': route['duration_minutes'],
+            'duration_seconds': route['duration_seconds']
+        }

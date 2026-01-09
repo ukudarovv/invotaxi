@@ -13,6 +13,15 @@ class CityViewSet(viewsets.ModelViewSet):
     serializer_class = CitySerializer
     permission_classes = [IsAdminOrReadOnly]  # Чтение всем, изменение только админам
     
+    def list(self, request, *args, **kwargs):
+        """Переопределяем list для логирования"""
+        queryset = self.get_queryset()
+        print(f"[CityViewSet] Queryset count: {queryset.count()}")
+        print(f"[CityViewSet] Queryset: {list(queryset.values('id', 'title'))}")
+        serializer = self.get_serializer(queryset, many=True)
+        print(f"[CityViewSet] Serialized data: {serializer.data}")
+        return Response(serializer.data)
+    
     @action(detail=True, methods=['get'], permission_classes=[AllowAny])
     def stats(self, request, pk=None):
         """Получить статистику по городу"""
@@ -66,6 +75,15 @@ class RegionViewSet(viewsets.ModelViewSet):
         return Region.objects.select_related('city').prefetch_related(
             'drivers', 'passengers'
         ).all()
+    
+    def list(self, request, *args, **kwargs):
+        """Переопределяем list для логирования"""
+        queryset = self.get_queryset()
+        print(f"[RegionViewSet] Queryset count: {queryset.count()}")
+        print(f"[RegionViewSet] Queryset: {list(queryset.values('id', 'title', 'city_id'))}")
+        serializer = self.get_serializer(queryset, many=True)
+        print(f"[RegionViewSet] Serialized data count: {len(serializer.data)}")
+        return Response(serializer.data)
     
     @action(detail=True, methods=['get'], permission_classes=[AllowAny])
     def stats(self, request, pk=None):

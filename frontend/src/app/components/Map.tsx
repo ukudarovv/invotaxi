@@ -5,6 +5,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { dispatchApi, DriverMarker, OrderMarker } from "../services/dispatch";
 import { getDispatchMapWebSocket, testWebSocketConnection } from "../services/websocket";
+import { regionsApi, City } from "../services/regions";
 
 // Fix для иконок Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -57,7 +58,8 @@ export function Map() {
   const [drivers, setDrivers] = useState<DriverMarker[]>([]);
   const [orders, setOrders] = useState<OrderMarker[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRegion, setSelectedRegion] = useState("Алматы");
+  const [cities, setCities] = useState<City[]>([]);
+  const [selectedCityId, setSelectedCityId] = useState<string>("all");
   const [showOnlineOnly, setShowOnlineOnly] = useState(false);
   const [selectedDriver, setSelectedDriver] = useState<DriverMarker | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<OrderMarker | null>(null);
@@ -65,9 +67,28 @@ export function Map() {
   const [wsReconnectAttempts, setWsReconnectAttempts] = useState(0);
   const wsRef = useRef<ReturnType<typeof getDispatchMapWebSocket> | null>(null);
 
-  const center: [number, number] = selectedRegion === "Алматы" 
-    ? [43.238949, 76.945833]
-    : [51.169392, 71.449074];
+  // Загрузка городов
+  useEffect(() => {
+    const loadCities = async () => {
+      try {
+        const citiesData = await regionsApi.getCities();
+        setCities(citiesData);
+        // Устанавливаем первый город по умолчанию, если есть
+        if (citiesData.length > 0 && selectedCityId === "all") {
+          setSelectedCityId(citiesData[0].id);
+        }
+      } catch (error) {
+        console.error("Error loading cities:", error);
+      }
+    };
+    loadCities();
+  }, []);
+
+  // Определяем центр карты на основе выбранного города
+  const selectedCity = cities.find(c => c.id === selectedCityId);
+  const center: [number, number] = selectedCity
+    ? [selectedCity.center_lat, selectedCity.center_lon]
+    : [47.1067, 51.9167]; // Атырау по умолчанию
 
   // Загрузка начальных данных
   useEffect(() => {
@@ -229,9 +250,8 @@ export function Map() {
   }, []);
 
   const filteredDrivers = drivers.filter((driver) => {
-    const matchesRegion = !selectedRegion || driver.region === selectedRegion || !driver.region;
     const matchesOnline = !showOnlineOnly || driver.is_online;
-    return matchesRegion && matchesOnline;
+    return matchesOnline;
   });
 
   const onlineCount = filteredDrivers.filter((d) => d.is_online).length;
@@ -334,15 +354,16 @@ export function Map() {
             <span className="text-sm text-gray-600 dark:text-gray-400">Фильтры:</span>
           </div>
           <select
-            value={selectedRegion}
-            onChange={(e) => setSelectedRegion(e.target.value)}
+            value={selectedCityId}
+            onChange={(e) => setSelectedCityId(e.target.value)}
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
           >
-            <option value="">Все регионы</option>
-            <option>Алматы</option>
-            <option>Нур-Султан</option>
-            <option>Шымкент</option>
-            <option>Караганда</option>
+            <option value="all">Все города</option>
+            {cities.map((city) => (
+              <option key={city.id} value={city.id}>
+                {city.title}
+              </option>
+            ))}
           </select>
           <label className="flex items-center gap-2 cursor-pointer">
             <input

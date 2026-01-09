@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
-import { Search, Plus, Eye, Edit, MapPin, Phone, Mail, X, Check, Car as CarIcon, Loader2, Trash2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Search, Plus, Eye, Edit, MapPin, Phone, Mail, X, Check, Car as CarIcon, Loader2, Trash2, Package } from "lucide-react";
 import { Modal } from "./Modal";
 import { MapView } from "./MapView";
 import { driversApi, Driver, CreateDriverRequest, UpdateDriverRequest } from "../services/drivers";
 import { regionsApi, Region } from "../services/regions";
+import { ordersApi, Order } from "../services/orders";
 
 export function Drivers() {
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -18,6 +19,10 @@ export function Drivers() {
   const [deleteModal, setDeleteModal] = useState<string | null>(null);
   const [callModal, setCallModal] = useState<{ name: string; phone: string } | null>(null);
   const [mapModal, setMapModal] = useState<string | null>(null);
+  const [ordersModal, setOrdersModal] = useState<string | null>(null);
+  const [driverOrders, setDriverOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersTab, setOrdersTab] = useState<"assigned" | "history">("assigned");
 
   // Состояния для редактирования
   const [editingName, setEditingName] = useState("");
@@ -70,6 +75,64 @@ export function Drivers() {
     } catch (err: any) {
       setError(err.message || "Ошибка обновления списка водителей");
     }
+  };
+
+  const loadDriverOrders = useCallback(async (driverId: string) => {
+    try {
+      setOrdersLoading(true);
+      const orders = await ordersApi.getOrders({ driver_id: Number(driverId) });
+      setDriverOrders(orders);
+    } catch (err: any) {
+      setError(err.message || "Ошибка загрузки заказов");
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (ordersModal) {
+      loadDriverOrders(ordersModal);
+    }
+  }, [ordersModal, loadDriverOrders]);
+
+  const assignedOrders = driverOrders.filter(order => 
+    ['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'].includes(order.status)
+  );
+
+  const historyOrders = driverOrders.filter(order => 
+    ['completed', 'cancelled'].includes(order.status)
+  );
+
+  const getStatusLabel = (status: string) => {
+    const statusLabels: Record<string, string> = {
+      'draft': 'Черновик',
+      'submitted': 'Отправлено',
+      'awaiting_dispatcher_decision': 'Ожидание решения диспетчера',
+      'rejected': 'Отклонено',
+      'active_queue': 'В очереди',
+      'assigned': 'Назначено',
+      'driver_en_route': 'Водитель в пути',
+      'arrived_waiting': 'Ожидание пассажира',
+      'no_show': 'Пассажир не пришел',
+      'ride_ongoing': 'Поездка началась',
+      'completed': 'Завершено',
+      'cancelled': 'Отменено',
+      'incident': 'Инцидент',
+    };
+    return statusLabels[status] || status;
+  };
+
+  const getStatusColor = (status: string) => {
+    if (['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'].includes(status)) {
+      return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
+    }
+    if (status === 'completed') {
+      return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+    }
+    if (status === 'cancelled') {
+      return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
+    }
+    return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300';
   };
 
   const filteredDrivers = drivers.filter((driver) => {
@@ -365,6 +428,13 @@ export function Drivers() {
                   title="На карте"
                 >
                   <MapPin className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setOrdersModal(String(driver.id))}
+                  className="text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300"
+                  title="Заказы"
+                >
+                  <Package className="w-5 h-5" />
                 </button>
                 <button
                   onClick={() => setDeleteModal(String(driver.id))}
@@ -949,6 +1019,120 @@ export function Drivers() {
               markerPosition={mapDriver.current_position ? [mapDriver.current_position.lat, mapDriver.current_position.lon] : [43.238949, 76.945833]}
               popupContent={`${mapDriver.name}<br />${mapDriver.region?.title || "Не указано"}`}
             />
+          </div>
+        )}
+      </Modal>
+
+      {/* Orders Modal */}
+      <Modal
+        isOpen={ordersModal !== null}
+        onClose={() => {
+          setOrdersModal(null);
+          setDriverOrders([]);
+          setOrdersTab("assigned");
+        }}
+        title={`Заказы водителя ${ordersModal ? drivers.find(d => String(d.id) === ordersModal)?.name : ""}`}
+        size="lg"
+      >
+        {ordersModal && (
+          <div className="space-y-4">
+            {/* Tabs */}
+            <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700">
+              <button
+                onClick={() => setOrdersTab("assigned")}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  ordersTab === "assigned"
+                    ? "border-b-2 border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                    : "text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
+                }`}
+              >
+                Назначенные ({assignedOrders.length})
+              </button>
+              <button
+                onClick={() => setOrdersTab("history")}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  ordersTab === "history"
+                    ? "border-b-2 border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                    : "text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
+                }`}
+              >
+                История ({historyOrders.length})
+              </button>
+            </div>
+
+            {/* Orders List */}
+            {ordersLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-600 dark:text-indigo-400" />
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {(ordersTab === "assigned" ? assignedOrders : historyOrders).length === 0 ? (
+                  <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                    <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p>
+                      {ordersTab === "assigned"
+                        ? "Нет назначенных заказов"
+                        : "История заказов пуста"}
+                    </p>
+                  </div>
+                ) : (
+                  (ordersTab === "assigned" ? assignedOrders : historyOrders).map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 border border-gray-200 dark:border-gray-600"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-sm font-medium dark:text-white">
+                              Заказ #{order.id.split('_')[1] || order.id}
+                            </span>
+                            <span
+                              className={`px-2 py-1 rounded-full text-xs ${getStatusColor(order.status)}`}
+                            >
+                              {getStatusLabel(order.status)}
+                            </span>
+                          </div>
+                          <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                            <div>
+                              <span className="font-medium">Откуда:</span> {order.pickup_title}
+                            </div>
+                            <div>
+                              <span className="font-medium">Куда:</span> {order.dropoff_title}
+                            </div>
+                            {order.passenger && (
+                              <div>
+                                <span className="font-medium">Пассажир:</span> {order.passenger.full_name} ({order.passenger.user.phone})
+                              </div>
+                            )}
+                            {order.final_price && (
+                              <div>
+                                <span className="font-medium">Стоимость:</span> {order.final_price.toFixed(2)} ₸
+                              </div>
+                            )}
+                            {order.distance_km && (
+                              <div>
+                                <span className="font-medium">Расстояние:</span> {order.distance_km.toFixed(2)} км
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                        Создан: {new Date(order.created_at).toLocaleString('ru-RU')}
+                        {order.assigned_at && (
+                          <> • Назначен: {new Date(order.assigned_at).toLocaleString('ru-RU')}</>
+                        )}
+                        {order.completed_at && (
+                          <> • Завершен: {new Date(order.completed_at).toLocaleString('ru-RU')}</>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
         )}
       </Modal>

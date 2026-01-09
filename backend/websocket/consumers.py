@@ -378,6 +378,27 @@ class DispatchMapConsumer(AsyncWebsocketConsumer):
             'data': event['data']
         }))
 
+    async def driver_route_update(self, event):
+        """Отправка обновления маршрута водителя"""
+        await self.send(text_data=json.dumps({
+            'type': 'driver_route_update',
+            'data': event['data']
+        }))
+
+    async def order_route_update(self, event):
+        """Отправка обновления маршрута заказа"""
+        await self.send(text_data=json.dumps({
+            'type': 'order_route_update',
+            'data': event['data']
+        }))
+
+    async def driver_eta_update(self, event):
+        """Отправка обновления ETA водителя"""
+        await self.send(text_data=json.dumps({
+            'type': 'driver_eta_update',
+            'data': event['data']
+        }))
+
 
 class TestWebSocketConsumer(AsyncWebsocketConsumer):
     """Тестовый WebSocket consumer без авторизации для диагностики"""

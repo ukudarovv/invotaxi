@@ -19,19 +19,27 @@ class OrderViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = super().get_queryset()
 
-        # Фильтрация по роли
-        if hasattr(user, 'passenger'):
+        # Админы и диспетчеры видят все заказы
+        if user.is_staff:
+            # Не применяем фильтрацию для администраторов
+            pass
+        # Фильтрация по роли для обычных пользователей
+        elif hasattr(user, 'passenger'):
             # Пассажир видит только свои заказы
             queryset = queryset.filter(passenger=user.passenger)
         elif hasattr(user, 'driver'):
             # Водитель видит только свои заказы
             queryset = queryset.filter(driver=user.driver)
-        # Админы видят все заказы
 
         # Фильтры
         status_filter = self.request.query_params.get('status')
         if status_filter:
-            queryset = queryset.filter(status=status_filter)
+            # Поддерживаем множественные статусы через запятую
+            statuses = [s.strip() for s in status_filter.split(',')]
+            if len(statuses) > 1:
+                queryset = queryset.filter(status__in=statuses)
+            else:
+                queryset = queryset.filter(status=status_filter)
 
         passenger_id = self.request.query_params.get('passenger_id')
         if passenger_id:

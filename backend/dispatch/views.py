@@ -292,3 +292,151 @@ class DispatchViewSet(viewsets.ViewSet):
             'orders_count': len(orders_data),
         })
 
+    @action(detail=False, methods=['get'], url_path='route')
+    def get_route(self, request):
+        """Получить маршрут между двумя точками"""
+        # Разрешаем доступ всем авторизованным пользователям
+        # (права проверяются на уровне permission_classes = [IsAuthenticated])
+
+        lat1 = request.query_params.get('lat1')
+        lon1 = request.query_params.get('lon1')
+        lat2 = request.query_params.get('lat2')
+        lon2 = request.query_params.get('lon2')
+
+        if not all([lat1, lon1, lat2, lon2]):
+            return Response(
+                {'error': 'Требуются параметры: lat1, lon1, lat2, lon2'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            lat1 = float(lat1)
+            lon1 = float(lon1)
+            lat2 = float(lat2)
+            lon2 = float(lon2)
+        except ValueError:
+            return Response(
+                {'error': 'Неверный формат координат'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        engine = DispatchEngine()
+        route_data = engine.calculate_route(lat1, lon1, lat2, lon2)
+        
+        # Преобразуем datetime в строку для JSON
+        route_data['eta'] = route_data['eta'].isoformat()
+        
+        return Response(route_data)
+
+    @action(detail=False, methods=['get'], url_path='driver-route/(?P<driver_id>[^/.]+)')
+    def get_driver_route(self, request, driver_id=None):
+        """Получить маршрут водителя до активного заказа"""
+        # Разрешаем доступ всем авторизованным пользователям
+        # (права проверяются на уровне permission_classes = [IsAuthenticated])
+
+        try:
+            driver = Driver.objects.get(id=driver_id)
+        except Driver.DoesNotExist:
+            return Response(
+                {'error': 'Водитель не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Ищем активный заказ водителя
+        active_statuses = [
+            OrderStatus.ASSIGNED,
+            OrderStatus.DRIVER_EN_ROUTE,
+            OrderStatus.ARRIVED_WAITING,
+            OrderStatus.RIDE_ONGOING,
+        ]
+        order = Order.objects.filter(
+            driver=driver,
+            status__in=active_statuses
+        ).first()
+
+        if not order:
+            return Response(
+                {'error': 'У водителя нет активного заказа'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        engine = DispatchEngine()
+        route_data = engine.calculate_driver_route(driver, order)
+        
+        if not route_data:
+            return Response(
+                {'error': 'Не удалось рассчитать маршрут (отсутствуют координаты)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Преобразуем datetime в строку для JSON
+        route_data['eta'] = route_data['eta'].isoformat()
+        route_data['order_id'] = str(order.id)
+        
+        return Response(route_data)
+
+    @action(detail=False, methods=['get'], url_path='order-route/(?P<order_id>[^/.]+)')
+    def get_order_route(self, request, order_id=None):
+        """Получить маршрут заказа (от точки забора до точки высадки)"""
+        # Разрешаем доступ всем авторизованным пользователям
+        # (права проверяются на уровне permission_classes = [IsAuthenticated])
+
+        try:
+            order = Order.objects.get(id=order_id)
+        except Order.DoesNotExist:
+            return Response(
+                {'error': 'Заказ не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        engine = DispatchEngine()
+        route_data = engine.calculate_order_route(order)
+        
+        if not route_data:
+            return Response(
+                {'error': 'Не удалось рассчитать маршрут (отсутствуют координаты)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Преобразуем datetime в строку для JSON
+        route_data['eta'] = route_data['eta'].isoformat()
+        
+        return Response(route_data)
+
+    @action(detail=False, methods=['get'], url_path='eta/(?P<driver_id>[^/.]+)/(?P<order_id>[^/.]+)')
+    def get_eta(self, request, driver_id=None, order_id=None):
+        """Получить расчетное время прибытия (ETA) водителя к заказу"""
+        # Проверяем права доступа
+        user = request.user
+        if not user.is_staff:
+            return Response(
+                {'error': 'Нет прав'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            driver = Driver.objects.get(id=driver_id)
+        except Driver.DoesNotExist:
+            return Response(
+                {'error': 'Водитель не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            order = Order.objects.get(id=order_id)
+        except Order.DoesNotExist:
+            return Response(
+                {'error': 'Заказ не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        engine = DispatchEngine()
+        eta_data = engine.calculate_eta(driver, order)
+        
+        if not eta_data:
+            return Response(
+                {'error': 'Не удалось рассчитать ETA (отсутствуют координаты)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        return Response(eta_data)

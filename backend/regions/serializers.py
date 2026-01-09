@@ -1,3 +1,4 @@
+import uuid
 from rest_framework import serializers
 from .models import Region, City
 
@@ -5,11 +6,11 @@ from .models import Region, City
 class CitySerializer(serializers.ModelSerializer):
     """Сериализатор для города"""
     center = serializers.SerializerMethodField()
+    id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = City
         fields = ['id', 'title', 'center_lat', 'center_lon', 'center']
-        read_only_fields = ['id']
 
     def get_center(self, obj):
         return {
@@ -28,6 +29,30 @@ class CitySerializer(serializers.ModelSerializer):
         if value < -180 or value > 180:
             raise serializers.ValidationError("Долгота должна быть в диапазоне от -180 до 180")
         return value
+    
+    def validate_id(self, value):
+        """Валидация ID города"""
+        if value and isinstance(value, str) and value.strip() == '':
+            # Пустая строка - это валидное значение для автогенерации
+            return None
+        return value
+    
+    def create(self, validated_data):
+        """Создание города с автоматической генерацией ID, если он не указан"""
+        # Получаем id из validated_data, если он указан
+        city_id = validated_data.pop('id', None)
+        
+        # Если ID не указан, пустой или None, генерируем новый
+        if not city_id or (isinstance(city_id, str) and city_id.strip() == ''):
+            city_id = f'city_{uuid.uuid4().hex[:12]}'
+        
+        # Проверяем, не существует ли уже город с таким ID
+        # Если существует, генерируем новый уникальный ID
+        while City.objects.filter(id=city_id).exists():
+            city_id = f'city_{uuid.uuid4().hex[:12]}'
+        
+        validated_data['id'] = city_id
+        return super().create(validated_data)
 
 
 class RegionSerializer(serializers.ModelSerializer):
@@ -98,6 +123,11 @@ class RegionSerializer(serializers.ModelSerializer):
         city_id = validated_data.pop('city_id')
         city = City.objects.get(id=city_id)
         validated_data['city'] = city
+        
+        # Автоматическая генерация ID, если он не указан
+        if 'id' not in validated_data or not validated_data.get('id'):
+            validated_data['id'] = f'region_{uuid.uuid4().hex[:12]}'
+        
         return super().create(validated_data)
     
     def update(self, instance, validated_data):

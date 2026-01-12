@@ -166,6 +166,79 @@ class OrderService:
         allowed = valid_transitions.get(old_status, [])
         return new_status in allowed
 
+    @staticmethod
+    def get_valid_transitions(current_status: str) -> list:
+        """
+        Возвращает список допустимых переходов для текущего статуса
+        """
+        valid_transitions = {
+            OrderStatus.DRAFT: [OrderStatus.SUBMITTED, OrderStatus.CANCELLED],
+            OrderStatus.SUBMITTED: [
+                OrderStatus.AWAITING_DISPATCHER_DECISION,
+                OrderStatus.REJECTED,
+                OrderStatus.CANCELLED,
+                OrderStatus.CREATED,
+                OrderStatus.MATCHING,
+            ],
+            OrderStatus.AWAITING_DISPATCHER_DECISION: [
+                OrderStatus.ACTIVE_QUEUE,
+                OrderStatus.MATCHING,
+                OrderStatus.REJECTED,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.REJECTED: [
+                OrderStatus.SUBMITTED,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.CREATED: [
+                OrderStatus.MATCHING,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.MATCHING: [
+                OrderStatus.OFFERED,
+                OrderStatus.ACTIVE_QUEUE,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.ACTIVE_QUEUE: [
+                OrderStatus.MATCHING,
+                OrderStatus.OFFERED,
+                OrderStatus.ASSIGNED,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.OFFERED: [
+                OrderStatus.ASSIGNED,
+                OrderStatus.MATCHING,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.ASSIGNED: [
+                OrderStatus.DRIVER_EN_ROUTE,
+                OrderStatus.MATCHING,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.DRIVER_EN_ROUTE: [
+                OrderStatus.ARRIVED_WAITING,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.ARRIVED_WAITING: [
+                OrderStatus.RIDE_ONGOING,
+                OrderStatus.NO_SHOW,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.RIDE_ONGOING: [
+                OrderStatus.COMPLETED,
+                OrderStatus.INCIDENT,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.NO_SHOW: [OrderStatus.CANCELLED],
+            OrderStatus.INCIDENT: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
+            OrderStatus.CANCELLED: [
+                OrderStatus.SUBMITTED,
+                OrderStatus.ACTIVE_QUEUE,
+                OrderStatus.MATCHING
+            ],
+        }
+        return valid_transitions.get(current_status, [])
+
 
 class PriceCalculator:
     """Сервис для расчета цены заказа"""

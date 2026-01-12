@@ -224,19 +224,62 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           
           // Проверяем статус заказа и переводим в active_queue если нужно
           const order = orders.find(o => o.id === assignModal);
+          
+          // Блокируем назначение для завершенных и отмененных заказов
+          const blockedStatuses = ['completed', 'cancelled'];
+          if (order && blockedStatuses.includes(order.status)) {
+            setError(`Нельзя назначить водителя на заказ в статусе "${statusMap[order.status] || order.status}". Заказ уже завершен или отменен.`);
+            setCandidates([]);
+            setLoadingCandidates(false);
+            return;
+          }
+          
           if (order && order.status !== 'active_queue') {
-            // Переводим заказ в статус active_queue
-            try {
-              await ordersApi.updateOrderStatus(assignModal, {
-                status: 'active_queue',
-                reason: 'Перевод в очередь для назначения водителя'
-              });
-              // Обновляем список заказов
-              await refreshOrders();
-            } catch (statusErr: any) {
-              setError(`Не удалось перевести заказ в очередь: ${statusErr.message}`);
-              setLoadingCandidates(false);
-              return;
+            // Проверяем, можно ли перевести в active_queue
+            const canTransitionToQueue = [
+              'submitted',
+              'awaiting_dispatcher_decision',
+              'matching',
+              'cancelled',
+              'rejected'
+            ].includes(order.status);
+            
+            if (canTransitionToQueue) {
+              // Переводим заказ в статус active_queue
+              try {
+                await ordersApi.updateOrderStatus(assignModal, {
+                  status: 'active_queue',
+                  reason: 'Перевод в очередь для назначения водителя'
+                });
+                // Обновляем список заказов
+                await refreshOrders();
+              } catch (statusErr: any) {
+                // Получаем детальное сообщение об ошибке
+                const errorDetails = statusErr.response?.data;
+                let errorMessage = statusErr.message || 'Не удалось перевести заказ в очередь';
+                
+                if (errorDetails?.error) {
+                  errorMessage = errorDetails.error;
+                  if (errorDetails.valid_transitions && Array.isArray(errorDetails.valid_transitions) && errorDetails.valid_transitions.length > 0) {
+                    errorMessage += `\nДопустимые переходы из статуса "${order.status}": ${errorDetails.valid_transitions.join(', ')}`;
+                  }
+                }
+                
+                // Если ошибка связана с недопустимым переходом, пробуем назначить напрямую
+                // endpoint назначения сам обработает статус
+                if (errorDetails?.error?.includes('Недопустимый переход')) {
+                  console.warn(`Не удалось перевести заказ ${assignModal} в очередь, пробуем назначить напрямую`);
+                  // Продолжаем загрузку кандидатов - endpoint назначения сам разберется
+                } else {
+                  setError(errorMessage);
+                  setLoadingCandidates(false);
+                  return;
+                }
+              }
+            } else {
+              // Если нельзя перевести в очередь, пробуем назначить напрямую
+              // endpoint назначения сам переведет заказ в нужный статус
+              console.log(`Заказ ${order.id} в статусе ${order.status}, нельзя перевести в очередь, пробуем назначить напрямую`);
             }
           }
           
@@ -510,9 +553,18 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       return;
     }
 
+    // Проверяем, что выбранный водитель есть в списке кандидатов
+    const selectedDriver = candidates.find(c => String(c.driver_id) === String(selectedDriverId));
+    if (!selectedDriver && candidates.length > 0) {
+      console.warn(`Выбранный водитель ${selectedDriverId} не найден в списке кандидатов`);
+      // Продолжаем попытку назначения - возможно водитель был добавлен после загрузки кандидатов
+    }
+
     try {
       setAssigning(true);
       setError(null);
+      
+      console.log(`Назначение водителя ${selectedDriverId} на заказ ${assignModal}`);
       const response = await dispatchApi.assignOrder(assignModal, String(selectedDriverId));
       
       if (response.success) {
@@ -521,11 +573,58 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
         setAssignModal(null);
         setSelectedDriverId(null);
         setCandidates([]);
+        toast.success(`Водитель успешно назначен на заказ`);
       } else {
-        setError(response.rejection_reason || "Не удалось назначить водителя");
+        const errorMsg = response.rejection_reason || response.error || response.reason || "Не удалось назначить водителя";
+        setError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (err: any) {
-      setError(err.message || "Ошибка назначения водителя");
+      // Получаем детальное сообщение об ошибке
+      const errorDetails = err.response?.data;
+      let errorMessage = err.message || "Ошибка назначения водителя";
+      
+      console.error("Ошибка назначения водителя:", err);
+      console.error("Детали ошибки:", errorDetails);
+      console.error("Полный ответ:", err.response);
+      
+      if (errorDetails) {
+        if (errorDetails.error) {
+          errorMessage = errorDetails.error;
+          // Добавляем дополнительную информацию если есть
+          const details: string[] = [];
+          
+          if (errorDetails.current_status) {
+            details.push(`Текущий статус: ${errorDetails.current_status}`);
+          }
+          if (errorDetails.valid_transitions && Array.isArray(errorDetails.valid_transitions) && errorDetails.valid_transitions.length > 0) {
+            details.push(`Допустимые переходы: ${errorDetails.valid_transitions.join(', ')}`);
+          }
+          if (errorDetails.driver_name) {
+            details.push(`Водитель: ${errorDetails.driver_name}`);
+          }
+          if (errorDetails.is_online === false) {
+            details.push(`Водитель не онлайн. Включите онлайн статус.`);
+          }
+          if (errorDetails.driver_capacity !== undefined && errorDetails.required_seats !== undefined) {
+            details.push(`Вместимость: ${errorDetails.driver_capacity}, требуется: ${errorDetails.required_seats}`);
+          }
+          if (errorDetails.driver_status) {
+            details.push(`Статус водителя: ${errorDetails.driver_status}`);
+          }
+          
+          if (details.length > 0) {
+            errorMessage += '\n' + details.join('\n');
+          }
+        } else if (errorDetails.detail) {
+          errorMessage = errorDetails.detail;
+        } else if (typeof errorDetails === 'string') {
+          errorMessage = errorDetails;
+        }
+      }
+      
+      setError(errorMessage);
+      toast.error(errorMessage.split('\n')[0]); // Показываем только первую строку в toast
     } finally {
       setAssigning(false);
     }
@@ -838,7 +937,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                       >
                         <Edit className="w-5 h-5" />
                       </button>
-                            {displayOrder.driver === "Неназначен" && (
+                            {displayOrder.driver === "Неназначен" && 
+                        // Не показываем кнопку для завершенных заказов
+                        order.status !== 'completed' && (
                         <button
                           onClick={() => setAssignModal(order.id)}
                           className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300"
@@ -1347,6 +1448,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           setAssignModal(null);
           setSelectedDriverId(null);
           setCandidates([]);
+          setError(null); // Очищаем ошибку при закрытии
         }}
         title="Назначить водителя"
         size="md"
@@ -1356,7 +1458,18 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
               <p className="text-sm text-gray-500 dark:text-gray-400">Заказ</p>
               <p className="dark:text-white">{selectedOrder.id} - {selectedOrder.passenger}</p>
+              {selectedOrder.status && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Статус: {statusMap[selectedOrder.status] || selectedOrder.status}
+                </p>
+              )}
             </div>
+
+            {error && (
+              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-700 dark:text-red-400 whitespace-pre-line">{error}</p>
+              </div>
+            )}
 
             <div className="space-y-2">
               <p className="text-sm text-gray-700 dark:text-gray-300">Доступные водители</p>

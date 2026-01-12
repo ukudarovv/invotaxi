@@ -125,16 +125,27 @@ export const dispatchApi = {
    * Назначить заказ водителю
    */
   async assignOrder(orderId: string, driverId?: string): Promise<AssignOrderResponse> {
-    const response = await api.post<AssignOrderResponse>(`/dispatch/assign/${orderId}/`, driverId ? { driver_id: driverId } : {});
-    const data = response.data;
-    
-    // Проверяем success: false даже при успешном HTTP-ответе
-    if (data.success === false) {
-      const errorMessage = data.rejection_reason || data.reason || 'Не удалось назначить водителя';
-      throw new Error(errorMessage);
+    try {
+      const response = await api.post<AssignOrderResponse>(`/dispatch/assign/${orderId}/`, driverId ? { driver_id: driverId } : {});
+      const data = response.data;
+      
+      // Проверяем success: false даже при успешном HTTP-ответе
+      if (data.success === false) {
+        const errorMessage = data.rejection_reason || data.reason || data.error || 'Не удалось назначить водителя';
+        const error: any = new Error(errorMessage);
+        error.response = { data };
+        throw error;
+      }
+      
+      return data;
+    } catch (err: any) {
+      // Если это уже обработанная ошибка от axios interceptor, просто пробрасываем её
+      if (err.response) {
+        throw err;
+      }
+      // Иначе создаем ошибку с деталями
+      throw err;
     }
-    
-    return data;
   },
 
   /**

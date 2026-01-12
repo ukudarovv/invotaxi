@@ -458,18 +458,31 @@ export function Dispatch() {
         
         try {
           // Сначала переводим заказ в active_queue, если он еще не там
-          if (order.status !== "active_queue") {
+          // Проверяем, можно ли перевести в active_queue
+          const canTransitionToQueue = [
+            'submitted',
+            'awaiting_dispatcher_decision',
+            'matching',
+            'cancelled',
+            'rejected'
+          ].includes(order.status);
+          
+          if (order.status !== "active_queue" && canTransitionToQueue) {
             try {
               await ordersApi.updateOrderStatus(order.id, {
                 status: "active_queue",
                 reason: "Автоматический перевод в очередь для назначения"
               });
             } catch (statusErr: any) {
-              console.warn(`Не удалось перевести заказ ${order.id} в очередь:`, statusErr);
+              const errorDetails = statusErr.response?.data;
+              const errorMsg = errorDetails?.error || statusErr.message || 'Не удалось перевести в очередь';
+              console.warn(`Не удалось перевести заказ ${order.id} в очередь:`, errorMsg);
+              // Продолжаем попытку назначения - endpoint сам обработает статус
             }
           }
 
           // Назначаем заказ автоматически (без указания водителя)
+          // endpoint назначения сам переведет заказ в нужный статус если нужно
           const result = await dispatchApi.assignOrder(order.id);
           
           // Проверяем результат назначения

@@ -22,9 +22,14 @@ class DispatchViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='assign/(?P<order_id>[^/.]+)')
     def assign_order(self, request, order_id=None):
         """Назначение заказа водителю"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             order = Order.objects.get(id=order_id)
+            logger.info(f'Назначение заказа {order_id}: текущий статус = {order.status}, driver_id = {request.data.get("driver_id")}')
         except Order.DoesNotExist:
+            logger.error(f'Заказ {order_id} не найден')
             return Response(
                 {'error': 'Заказ не найден'},
                 status=status.HTTP_404_NOT_FOUND
@@ -33,6 +38,7 @@ class DispatchViewSet(viewsets.ViewSet):
         # Проверяем права доступа (только админы или диспетчеры)
         user = request.user
         if not user.is_staff and not hasattr(user, 'driver'):
+            logger.warning(f'Пользователь {user.id} не имеет прав для назначения заказов')
             return Response(
                 {'error': 'Нет прав для назначения заказов'},
                 status=status.HTTP_403_FORBIDDEN
@@ -40,16 +46,34 @@ class DispatchViewSet(viewsets.ViewSet):
 
         # Получаем driver_id из запроса, если указан
         driver_id = request.data.get('driver_id')
+        logger.info(f'Назначение заказа {order_id}: driver_id = {driver_id}, текущий статус = {order.status}')
         
         # Проверяем статус заказа и автоматически переводим в active_queue если нужно
         if order.status != OrderStatus.ACTIVE_QUEUE:
             # Автоматически переводим в очередь, если заказ в подходящем статусе
+            # Проверяем, можно ли перевести в active_queue согласно валидации переходов
             valid_statuses_for_queue = [
                 OrderStatus.SUBMITTED,
                 OrderStatus.AWAITING_DISPATCHER_DECISION,
-                OrderStatus.ASSIGNED,  # Может быть переназначен
+                OrderStatus.MATCHING,
+                OrderStatus.CANCELLED,  # Можно восстановить отмененный заказ
+                OrderStatus.ASSIGNED,  # Может быть переназначен (через MATCHING)
             ]
+            
+            # Проверяем, можно ли перевести в active_queue
+            can_transition_to_queue = False
             if order.status in valid_statuses_for_queue:
+                # Дополнительно проверяем через валидацию переходов
+                if OrderService.validate_status_transition(order.status, OrderStatus.ACTIVE_QUEUE):
+                    can_transition_to_queue = True
+                elif order.status == OrderStatus.ASSIGNED:
+                    # Для ASSIGNED сначала переводим в MATCHING, затем в ACTIVE_QUEUE
+                    if OrderService.validate_status_transition(order.status, OrderStatus.MATCHING):
+                        OrderService.update_status(order, OrderStatus.MATCHING, 'Перевод в поиск для переназначения', user)
+                        order.refresh_from_db()
+                        can_transition_to_queue = True
+            
+            if can_transition_to_queue:
                 # Очищаем водителя при переводе в очередь для нового назначения
                 if order.driver_id:
                     order.driver = None
@@ -58,8 +82,39 @@ class DispatchViewSet(viewsets.ViewSet):
                 OrderService.update_status(order, OrderStatus.ACTIVE_QUEUE, 'Автоматический перевод в очередь для назначения водителя', user)
                 order.refresh_from_db()
             else:
+                # Получаем допустимые переходы для информативного сообщения
+                valid_transitions = OrderService.get_valid_transitions(order.status)
+                
+                # Формируем понятное сообщение в зависимости от статуса
+                if order.status == OrderStatus.COMPLETED:
+                    error_message = 'Нельзя назначить водителя на завершенный заказ. Заказ уже выполнен.'
+                elif order.status == OrderStatus.CANCELLED:
+                    error_message = 'Нельзя назначить водителя на отмененный заказ. Сначала восстановите заказ.'
+                else:
+                    error_message = f'Заказ должен быть в статусе {OrderStatus.ACTIVE_QUEUE} для назначения. Текущий статус: {order.status}'
+                
+                logger.warning(
+                    f'Не удалось перевести заказ {order_id} в очередь: '
+                    f'текущий статус = {order.status}, допустимые переходы = {valid_transitions}'
+                )
+                
+                response_data = {
+                    'success': False,
+                    'error': error_message,
+                    'current_status': order.status,
+                    'order_id': order_id
+                }
+                
+                if valid_transitions:
+                    response_data['valid_transitions'] = valid_transitions
+                    response_data['suggestion'] = 'Сначала переведите заказ в один из допустимых статусов'
+                elif order.status == OrderStatus.COMPLETED:
+                    response_data['suggestion'] = 'Завершенный заказ нельзя изменить. Создайте новый заказ.'
+                elif order.status == OrderStatus.CANCELLED:
+                    response_data['suggestion'] = 'Отмененный заказ можно восстановить, переведя его в статус submitted или active_queue'
+                
                 return Response(
-                    {'error': f'Заказ должен быть в статусе {OrderStatus.ACTIVE_QUEUE}. Текущий статус: {order.status}'},
+                    response_data,
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -70,38 +125,108 @@ class DispatchViewSet(viewsets.ViewSet):
         if driver_id:
             from accounts.models import Driver
             try:
-                driver = Driver.objects.get(id=int(driver_id), is_online=True)
-                # Проверяем, что водитель подходит для заказа
-                if driver.capacity < order.seats_needed:
+                # Пробуем найти водителя (сначала без проверки онлайн статуса)
+                try:
+                    driver = Driver.objects.get(id=int(driver_id))
+                except (Driver.DoesNotExist, ValueError) as e:
+                    logger.error(f'Водитель с ID {driver_id} не найден: {str(e)}')
                     return Response(
-                        {'error': f'Водитель {driver.name} не подходит: недостаточная вместимость'},
+                        {
+                            'success': False,
+                            'error': f'Водитель с ID {driver_id} не найден',
+                            'driver_id': driver_id
+                        },
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+                
+                # Проверяем онлайн статус
+                if not driver.is_online:
+                    logger.warning(f'Водитель {driver.id} ({driver.name}) не онлайн')
+                    return Response(
+                        {
+                            'success': False,
+                            'error': f'Водитель {driver.name} не онлайн. Включите онлайн статус для назначения заказов.',
+                            'driver_id': driver.id,
+                            'driver_name': driver.name,
+                            'is_online': driver.is_online
+                        },
                         status=status.HTTP_400_BAD_REQUEST
                     )
+                
+                # Проверяем, что водитель подходит для заказа
+                if driver.capacity < order.seats_needed:
+                    logger.warning(
+                        f'Водитель {driver.id} не подходит для заказа {order.id}: '
+                        f'вместимость {driver.capacity} < требуется {order.seats_needed}'
+                    )
+                    return Response(
+                        {
+                            'success': False,
+                            'error': f'Водитель {driver.name} не подходит: недостаточная вместимость (есть {driver.capacity}, требуется {order.seats_needed})',
+                            'driver_id': driver.id,
+                            'driver_capacity': driver.capacity,
+                            'required_seats': order.seats_needed
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Проверяем статус водителя (не должен быть занят)
+                from accounts.models import DriverStatus
+                if hasattr(driver, 'status') and driver.status in [
+                    DriverStatus.ON_TRIP,
+                    DriverStatus.ENROUTE_TO_PICKUP,
+                    DriverStatus.OFFERED
+                ]:
+                    logger.warning(f'Водитель {driver.id} занят (статус: {driver.status})')
+                    return Response(
+                        {
+                            'success': False,
+                            'error': f'Водитель {driver.name} занят (статус: {driver.status})',
+                            'driver_id': driver.id,
+                            'driver_status': driver.status
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
                 # Назначаем указанного водителя
+                logger.info(f'Назначаем водителя {driver.id} ({driver.name}) на заказ {order.id}')
                 # Важно: сначала устанавливаем driver_id, затем driver для правильной работы Django ORM
                 order.driver_id = driver.id
                 order.driver = driver
                 order.assignment_reason = f'Назначен водитель {driver.name} вручную'
                 OrderService.update_status(order, OrderStatus.ASSIGNED, order.assignment_reason, user)
                 
+                # Обновляем статус водителя
+                driver.status = DriverStatus.ENROUTE_TO_PICKUP
+                driver.idle_since = None
+                driver.save(update_fields=['status', 'idle_since'])
+                
+                logger.info(f'Заказ {order.id} успешно назначен водителю {driver.id}')
+                
                 return Response({
                     'success': True,
-                    'driver_id': driver.id,
+                    'driver_id': str(driver.id),
                     'reason': order.assignment_reason,
                     'order': {
                         'id': order.id,
                         'status': order.status,
                         'driver': {
-                            'id': driver.id,
+                            'id': str(driver.id),
                             'name': driver.name,
                             'car_model': driver.car_model
                         }
                     }
                 })
-            except Driver.DoesNotExist:
+            except Exception as e:
+                logger.error(f'Ошибка при назначении водителя {driver_id} на заказ {order_id}: {str(e)}', exc_info=True)
                 return Response(
-                    {'error': 'Водитель не найден или не онлайн'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {
+                        'success': False,
+                        'error': f'Ошибка назначения водителя: {str(e)}',
+                        'driver_id': driver_id,
+                        'order_id': order_id
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
         
         # Иначе используем автоматический алгоритм

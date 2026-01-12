@@ -117,13 +117,24 @@ api.interceptors.response.use(
       }
       
       // Обычные ошибки
-      const errorMessage = responseData?.rejection_reason || 
+      let errorMessage = responseData?.rejection_reason || 
                           responseData?.reason ||
                           responseData?.error || 
                           responseData?.detail ||
                           (typeof responseData === 'string' ? responseData : null) ||
                           error.message ||
                           'Произошла ошибка';
+      
+      // Добавляем детали ошибки если есть
+      if (responseData?.valid_transitions && Array.isArray(responseData.valid_transitions)) {
+        errorMessage += `\nДопустимые переходы: ${responseData.valid_transitions.join(', ')}`;
+      }
+      if (responseData?.current_status) {
+        errorMessage += `\nТекущий статус: ${responseData.current_status}`;
+      }
+      if (responseData?.requested_status) {
+        errorMessage += `\nЗапрашиваемый статус: ${responseData.requested_status}`;
+      }
       
       return Promise.reject(new Error(errorMessage));
     } else if (error.request) {

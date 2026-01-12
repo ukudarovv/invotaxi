@@ -65,9 +65,31 @@ class OrderViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path='status')
     def update_status(self, request, pk=None):
         """Обновление статуса заказа"""
-        order = self.get_object()
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            order = self.get_object()
+            logger.info(f'Обновление статуса заказа {order.id}: текущий статус = {order.status}, запрос = {request.data}')
+        except Exception as e:
+            logger.error(f'Ошибка получения заказа {pk}: {str(e)}')
+            return Response(
+                {'error': f'Заказ не найден: {str(e)}'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Валидация входных данных
         serializer = OrderStatusUpdateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning(f'Невалидные данные для заказа {order.id}: {serializer.errors}, получено: {request.data}')
+            return Response(
+                {
+                    'error': 'Неверные данные запроса',
+                    'details': serializer.errors,
+                    'received_data': request.data
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         new_status = serializer.validated_data['status']
         reason = serializer.validated_data.get('reason', '')
@@ -96,14 +118,31 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         if not can_update:
             return Response(
-                {'error': 'Нет прав для изменения статуса'},
+                {
+                    'error': 'Нет прав для изменения статуса',
+                    'current_user_role': 'passenger' if hasattr(user, 'passenger') else ('driver' if hasattr(user, 'driver') else 'admin'),
+                    'order_status': order.status,
+                    'requested_status': new_status
+                },
                 status=status.HTTP_403_FORBIDDEN
             )
 
         # Валидируем переход статуса
         if not OrderService.validate_status_transition(order.status, new_status):
+            # Получаем допустимые переходы для текущего статуса
+            valid_transitions = OrderService.get_valid_transitions(order.status)
+            logger.warning(
+                f'Недопустимый переход статуса для заказа {order.id}: '
+                f'{order.status} -> {new_status}. Допустимые переходы: {valid_transitions}'
+            )
             return Response(
-                {'error': f'Недопустимый переход статуса: {order.status} -> {new_status}'},
+                {
+                    'error': f'Недопустимый переход статуса: {order.status} -> {new_status}',
+                    'current_status': order.status,
+                    'requested_status': new_status,
+                    'valid_transitions': valid_transitions,
+                    'order_id': order.id
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
 

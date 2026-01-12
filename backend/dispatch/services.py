@@ -81,14 +81,36 @@ class DispatchEngine:
         """
         seats_needed = order.seats_needed
 
-        # Получаем всех онлайн водителей
+        # Получаем всех онлайн водителей с правильным статусом
+        # Используем старые проверки для совместимости, но также проверяем новые статусы если они есть
+        from accounts.models import DriverStatus
+        
+        # Фильтруем водителей: онлайн и доступные (не в поездке, не едут к подаче, не получили оффер)
         online_drivers = Driver.objects.filter(is_online=True)
+        
+        # Исключаем занятых водителей
+        excluded_statuses = [DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED]
+        # Используем exclude только если поле status существует
+        try:
+            online_drivers = online_drivers.exclude(status__in=excluded_statuses)
+        except Exception:
+            # Если поле status не существует (старая схема БД), просто используем is_online
+            pass
 
         candidates = []
         for driver in online_drivers:
             # Проверяем вместимость
             if driver.capacity < seats_needed:
                 continue
+            
+            # Дополнительная проверка статуса (для совместимости со старыми данными)
+            # Если статус не установлен или OFFLINE, но is_online=True, пропускаем
+            if hasattr(driver, 'status'):
+                if driver.status == DriverStatus.OFFLINE:
+                    continue
+                # Если водитель в статусе OFFERED, можно попробовать, но лучше пропустить для надежности
+                # if driver.status == DriverStatus.OFFERED:
+                #     continue
 
             candidates.append(driver)
 

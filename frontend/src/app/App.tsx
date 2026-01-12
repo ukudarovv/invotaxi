@@ -15,6 +15,7 @@ import { Analytics } from "./components/Analytics";
 import { Calls } from "./components/Calls";
 import { Logs } from "./components/Logs";
 import { Settings } from "./components/Settings";
+import { RideSimulation } from "./components/RideSimulation";
 
 type PageType =
   | "dashboard"
@@ -27,7 +28,8 @@ type PageType =
   | "analytics"
   | "calls"
   | "logs"
-  | "settings";
+  | "settings"
+  | "ride-simulation";
 
 function MainApp() {
   const { user, isLoading } = useAuth();
@@ -67,6 +69,8 @@ function MainApp() {
         return <Logs />;
       case "settings":
         return <Settings />;
+      case "ride-simulation":
+        return <RideSimulation />;
       default:
         return <Dashboard />;
     }

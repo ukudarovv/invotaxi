@@ -3,10 +3,12 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-from .models import Order, OrderStatus
+from .models import Order, OrderStatus, PricingConfig, SurgeZone, PriceBreakdown, CancelPolicy
 from .serializers import OrderSerializer, OrderStatusUpdateSerializer
 from .services import OrderService, PriceCalculator
+from .advanced_pricing import AdvancedPriceCalculator
 from accounts.models import Passenger, Driver
+from dispatch.services import DispatchEngine
 
 
 class OrderViewSet(viewsets.ModelViewSet):
@@ -106,22 +108,81 @@ class OrderViewSet(viewsets.ModelViewSet):
             )
 
         # Обновляем статус
-        OrderService.update_status(order, new_status, reason, user)
+        try:
+            OrderService.update_status(order, new_status, reason, user)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка обновления статуса заказа {order.id}: {str(e)}')
+            return Response(
+                {'error': f'Ошибка обновления статуса: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Перезагружаем объект из базы данных для получения актуальных данных
+        order.refresh_from_db()
         
         # Если заказ завершен, рассчитываем финальную цену
-        if new_status == OrderStatus.COMPLETED and not order.final_price:
-            price_data = PriceCalculator.calculate_final_price(
-                order,
-                actual_distance_km=order.distance_km,
-                actual_waiting_time_minutes=order.waiting_time_minutes
-            )
-            order.distance_km = price_data['distance_km']
-            order.waiting_time_minutes = price_data['waiting_time_minutes']
-            order.final_price = price_data['final_price']
-            order.price_breakdown = price_data['price_breakdown']
-            order.save()
+        if new_status == OrderStatus.COMPLETED:
+            try:
+                # Используем существующие значения или None (метод сам рассчитает)
+                # Передаем None, если значение отсутствует, чтобы метод сам рассчитал
+                actual_distance = order.distance_km if order.distance_km is not None else None
+                actual_waiting_time = order.waiting_time_minutes if order.waiting_time_minutes is not None else None
+                
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f'Начинаем расчет финальной цены для заказа {order.id}')
+                
+                price_data = PriceCalculator.calculate_final_price(
+                    order,
+                    actual_distance_km=actual_distance,
+                    actual_waiting_time_minutes=actual_waiting_time
+                )
+                
+                logger.info(f'Расчет цены завершен для заказа {order.id}, price_breakdown type: {type(price_data.get("price_breakdown"))}')
+                
+                # Убеждаемся, что price_breakdown содержит только сериализуемые типы
+                if price_data.get('price_breakdown'):
+                    breakdown = price_data['price_breakdown']
+                    # Проверяем и преобразуем все Decimal в float
+                    cleaned_breakdown = {}
+                    for key, value in breakdown.items():
+                        if isinstance(value, Decimal):
+                            cleaned_breakdown[key] = float(value)
+                        else:
+                            cleaned_breakdown[key] = value
+                    price_data['price_breakdown'] = cleaned_breakdown
+                
+                order.distance_km = price_data['distance_km']
+                order.waiting_time_minutes = price_data['waiting_time_minutes']
+                order.final_price = price_data['final_price']
+                order.price_breakdown = price_data['price_breakdown']
+                order.save()
+                
+                logger.info(f'Цена успешно сохранена для заказа {order.id}')
+            except Exception as e:
+                import logging
+                import traceback
+                logger = logging.getLogger(__name__)
+                logger.error(f'Ошибка расчета финальной цены для заказа {order.id}: {str(e)}')
+                logger.error(traceback.format_exc())
+                # Не прерываем выполнение, просто логируем ошибку
+                # Заказ уже обновлен, просто не рассчитана цена
 
-        return Response(OrderSerializer(order).data)
+        # Перезагружаем объект еще раз после всех изменений
+        order.refresh_from_db()
+        
+        try:
+            return Response(OrderSerializer(order).data)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка сериализации заказа {order.id}: {str(e)}')
+            return Response(
+                {'error': f'Ошибка сериализации данных: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=True, methods=['post'], url_path='calculate-price')
     def calculate_price(self, request, pk=None):
@@ -193,4 +254,161 @@ class OrderViewSet(viewsets.ModelViewSet):
         orders = self.get_queryset().filter(driver_id=driver_id)
         serializer = self.get_serializer(orders, many=True)
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='calculate-quote')
+    def calculate_quote(self, request, pk=None):
+        """Рассчитать предварительную цену (Quote) для заказа"""
+        order = self.get_object()
+        
+        # Получаем маршрут
+        dispatch_engine = DispatchEngine()
+        route_data = dispatch_engine.calculate_order_route(order)
+        
+        if not route_data:
+            return Response(
+                {'error': 'Не удалось рассчитать маршрут'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        route_distance_km = route_data['distance_km']
+        route_duration_min = route_data['duration_minutes']
+        
+        # Опции из запроса
+        options = request.data.get('options', {})
+        
+        # Рассчитываем quote
+        calculator = AdvancedPriceCalculator()
+        result = calculator.calculate_quote(
+            order,
+            route_distance_km,
+            route_duration_min,
+            options
+        )
+        
+        # Сохраняем quote в заказ
+        order.quote = result['quote']
+        order.quote_surge_multiplier = result['surge_multiplier']
+        order.quote_calculated_at = timezone.now()
+        order.save(update_fields=['quote', 'quote_surge_multiplier', 'quote_calculated_at'])
+        
+        # Фиксируем surge при назначении (если заказ уже назначен)
+        if order.status == OrderStatus.ASSIGNED and not order.locked_surge_multiplier:
+            order.locked_surge_multiplier = result['surge_multiplier']
+            order.surge_locked_at = timezone.now()
+            order.save(update_fields=['locked_surge_multiplier', 'surge_locked_at'])
+        
+        return Response({
+            'quote': result['quote'],
+            'surge_multiplier': result['surge_multiplier'],
+            'details': result['details'],
+            'breakdown_id': result['breakdown'].id
+        })
+    
+    @action(detail=True, methods=['post'], url_path='calculate-final')
+    def calculate_final(self, request, pk=None):
+        """Рассчитать финальную цену для заказа"""
+        order = self.get_object()
+        
+        # Проверяем права (только водитель или админ)
+        user = request.user
+        if not user.is_staff and not (hasattr(user, 'driver') and order.driver == user.driver):
+            return Response(
+                {'error': 'Нет прав для расчета финальной цены'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Получаем фактические данные из запроса или заказа
+        actual_distance_km = request.data.get('actual_distance_km') or order.distance_km
+        actual_duration_min = request.data.get('actual_duration_min')
+        actual_waiting_min = request.data.get('actual_waiting_min') or order.waiting_time_minutes or 0
+        
+        if not actual_distance_km:
+            return Response(
+                {'error': 'Не указано фактическое расстояние'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # GPS точки для фильтрации (опционально)
+        gps_points = request.data.get('gps_points')
+        options = request.data.get('options', {})
+        
+        # Рассчитываем финальную цену
+        calculator = AdvancedPriceCalculator()
+        result = calculator.calculate_final(
+            order,
+            actual_distance_km,
+            actual_duration_min or 0,
+            actual_waiting_min,
+            gps_points,
+            options
+        )
+        
+        # Сохраняем финальную цену
+        order.final_price = result['final_price']
+        order.distance_km = actual_distance_km
+        order.waiting_time_minutes = int(actual_waiting_min)
+        order.save(update_fields=['final_price', 'distance_km', 'waiting_time_minutes'])
+        
+        return Response({
+            'final_price': result['final_price'],
+            'surge_multiplier': result['surge_multiplier'],
+            'details': result['details'],
+            'breakdown_id': result['breakdown'].id
+        })
+    
+    @action(detail=True, methods=['post'], url_path='calculate-cancel-fee')
+    def calculate_cancel_fee(self, request, pk=None):
+        """Рассчитать штраф за отмену заказа"""
+        order = self.get_object()
+        
+        cancelled_by = request.data.get('cancelled_by', 'passenger')  # 'passenger' or 'driver'
+        
+        calculator = AdvancedPriceCalculator()
+        result = calculator.calculate_cancel_fee(order, cancelled_by)
+        
+        return Response(result)
+    
+    @action(detail=True, methods=['get'], url_path='price-breakdown')
+    def get_price_breakdown(self, request, pk=None):
+        """Получить детализацию цены заказа"""
+        order = self.get_object()
+        
+        price_type = request.query_params.get('type', 'quote')  # 'quote' or 'final'
+        
+        breakdown = PriceBreakdown.objects.filter(
+            order=order,
+            price_type=price_type
+        ).order_by('-created_at').first()
+        
+        if not breakdown:
+            return Response(
+                {'error': f'Детализация цены типа {price_type} не найдена'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        return Response({
+            'order_id': order.id,
+            'price_type': breakdown.price_type,
+            'base_fare': float(breakdown.base_fare),
+            'distance_km': float(breakdown.distance_km),
+            'distance_cost': float(breakdown.distance_cost),
+            'duration_min': float(breakdown.duration_min),
+            'duration_cost': float(breakdown.duration_cost),
+            'waiting_min': float(breakdown.waiting_min),
+            'waiting_cost': float(breakdown.waiting_cost),
+            'booking_fee': float(breakdown.booking_fee),
+            'companion_fee': float(breakdown.companion_fee),
+            'zone_fees': float(breakdown.zone_fees),
+            'options_fees': float(breakdown.options_fees),
+            'toll_fees': float(breakdown.toll_fees),
+            'night_multiplier': float(breakdown.night_multiplier),
+            'weekend_multiplier': float(breakdown.weekend_multiplier),
+            'disability_multiplier': float(breakdown.disability_multiplier),
+            'surge_multiplier': float(breakdown.surge_multiplier),
+            'subtotal_before_surge': float(breakdown.subtotal_before_surge),
+            'subtotal_after_surge': float(breakdown.subtotal_after_surge),
+            'minimum_fare_adjustment': float(breakdown.minimum_fare_adjustment),
+            'total': float(breakdown.total),
+            'created_at': breakdown.created_at.isoformat()
+        })
 

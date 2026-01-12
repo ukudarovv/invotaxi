@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .models import Order, OrderEvent, PricingConfig
+from .models import (
+    Order, OrderEvent, PricingConfig, OrderOffer, DispatchConfig,
+    SurgeZone, PriceBreakdown, CancelPolicy
+)
 
 
 @admin.register(Order)
@@ -66,4 +69,137 @@ class OrderEventAdmin(admin.ModelAdmin):
     search_fields = ['order__id']
     readonly_fields = ['created_at']
     date_hierarchy = 'created_at'
+
+
+@admin.register(OrderOffer)
+class OrderOfferAdmin(admin.ModelAdmin):
+    list_display = ['id', 'order', 'driver', 'status', 'created_at', 'expires_at', 'responded_at']
+    list_filter = ['status', 'created_at', 'expires_at']
+    search_fields = ['order__id', 'driver__name', 'driver__car_model']
+    readonly_fields = ['created_at', 'responded_at']
+    date_hierarchy = 'created_at'
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('order', 'driver', 'status')
+        }),
+        ('Временные метки', {
+            'fields': ('created_at', 'expires_at', 'responded_at')
+        }),
+        ('Данные для аналитики', {
+            'fields': ('eta_seconds', 'distance_km', 'cost_score', 'selection_reason'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(DispatchConfig)
+class DispatchConfigAdmin(admin.ModelAdmin):
+    list_display = ['name', 'is_active', 'eta_max_seconds', 'k_candidates', 'offer_timeout_seconds', 'created_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['name']
+    readonly_fields = ['created_at', 'updated_at']
+    fieldsets = (
+        ('Основные параметры', {
+            'fields': ('name', 'is_active')
+        }),
+        ('Параметры фильтрации', {
+            'fields': ('eta_max_seconds', 'k_candidates', 'offer_timeout_seconds')
+        }),
+        ('Веса скоринга', {
+            'fields': ('w_eta', 'w_deadhead', 'w_reject', 'w_cancel', 'w_fairness', 'w_zone', 'w_quality'),
+            'description': 'Сумма весов должна быть примерно равна 1.0'
+        }),
+        ('Пороги и лимиты', {
+            'fields': ('min_rating', 'max_offers_per_hour')
+        }),
+        ('Расширение поиска', {
+            'fields': ('expand_search_after_seconds', 'expand_eta_multiplier')
+        }),
+        ('Системная информация', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(SurgeZone)
+class SurgeZoneAdmin(admin.ModelAdmin):
+    list_display = ['name', 'region', 'current_multiplier', 'smoothed_multiplier', 'demand_count', 'supply_count', 'last_updated', 'is_active']
+    list_filter = ['is_active', 'region', 'last_updated']
+    search_fields = ['name', 'region__title']
+    readonly_fields = ['last_updated', 'created_at']
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('name', 'region', 'is_active')
+        }),
+        ('Геолокация', {
+            'fields': ('center_lat', 'center_lon', 'radius_meters', 'polygon_coordinates')
+        }),
+        ('Surge метрики', {
+            'fields': ('current_multiplier', 'smoothed_multiplier', 'demand_count', 'supply_count', 'last_updated')
+        }),
+        ('Системная информация', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(PriceBreakdown)
+class PriceBreakdownAdmin(admin.ModelAdmin):
+    list_display = ['order', 'price_type', 'total', 'surge_multiplier', 'created_at']
+    list_filter = ['price_type', 'created_at']
+    search_fields = ['order__id']
+    readonly_fields = ['created_at', 'updated_at']
+    date_hierarchy = 'created_at'
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('order', 'price_type')
+        }),
+        ('Базовые компоненты', {
+            'fields': ('base_fare', 'distance_km', 'distance_cost', 'duration_min', 'duration_cost')
+        }),
+        ('Ожидание', {
+            'fields': ('waiting_min', 'waiting_free_min', 'waiting_cost')
+        }),
+        ('Сборы', {
+            'fields': ('booking_fee', 'companion_fee', 'zone_fees', 'options_fees', 'toll_fees')
+        }),
+        ('Множители', {
+            'fields': ('night_multiplier', 'weekend_multiplier', 'disability_multiplier', 'surge_multiplier', 'surge_applied_to')
+        }),
+        ('Итоговые суммы', {
+            'fields': ('subtotal_before_surge', 'subtotal_after_surge', 'minimum_fare_adjustment', 'total', 'rounding_applied')
+        }),
+        ('Системная информация', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(CancelPolicy)
+class CancelPolicyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'region', 'cancel_before_assigned_fee', 'cancel_after_assigned_fee', 'cancel_after_arrived_fee', 'is_active']
+    list_filter = ['is_active', 'region']
+    search_fields = ['name', 'region__title']
+    readonly_fields = ['created_at', 'updated_at']
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('name', 'region', 'is_active')
+        }),
+        ('Отмена до назначения', {
+            'fields': ('cancel_before_assigned_fee',)
+        }),
+        ('Отмена после назначения', {
+            'fields': ('grace_cancel_seconds', 'cancel_after_assigned_fee')
+        }),
+        ('Отмена после прибытия', {
+            'fields': ('cancel_after_arrived_fee', 'cancel_after_arrived_include_waiting')
+        }),
+        ('Системная информация', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 

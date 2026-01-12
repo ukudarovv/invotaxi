@@ -13,6 +13,7 @@ import {
   LogOut,
   Sun,
   Moon,
+  PlayCircle,
 } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
@@ -28,7 +29,8 @@ type PageType =
   | "analytics"
   | "calls"
   | "logs"
-  | "settings";
+  | "settings"
+  | "ride-simulation";
 
 interface MenuItem {
   id: PageType;
@@ -48,6 +50,7 @@ const menuItems: MenuItem[] = [
   { id: "regions", label: "Регионы", icon: MapPin, permission: "manage_regions" },
   { id: "analytics", label: "Аналитика", icon: BarChart3, permission: "view_analytics" },
   { id: "logs", label: "Логи", icon: FileText, permission: "view_logs" },
+  { id: "ride-simulation", label: "Имитация поездки", icon: PlayCircle, permission: "view_drivers" },
   { id: "settings", label: "Настройки", icon: SettingsIcon, permission: "manage_settings" },
 ];
 

@@ -116,7 +116,15 @@ export const dispatchApi = {
    */
   async assignOrder(orderId: string, driverId?: string): Promise<AssignOrderResponse> {
     const response = await api.post<AssignOrderResponse>(`/dispatch/assign/${orderId}/`, driverId ? { driver_id: driverId } : {});
-    return response.data;
+    const data = response.data;
+    
+    // Проверяем success: false даже при успешном HTTP-ответе
+    if (data.success === false) {
+      const errorMessage = data.rejection_reason || data.reason || 'Не удалось назначить водителя';
+      throw new Error(errorMessage);
+    }
+    
+    return data;
   },
 
   /**

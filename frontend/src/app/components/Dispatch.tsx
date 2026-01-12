@@ -469,14 +469,28 @@ export function Dispatch() {
           }
 
           // Назначаем заказ автоматически (без указания водителя)
-          await dispatchApi.assignOrder(order.id);
-          assigned++;
+          const result = await dispatchApi.assignOrder(order.id);
+          
+          // Проверяем результат назначения
+          if (result.success && result.driver_id) {
+            assigned++;
+          } else {
+            failed++;
+            const errorMsg = result.rejection_reason || result.reason || "Не удалось назначить водителя";
+            failedOrders.push(`${order.id}: ${errorMsg}`);
+            console.warn(`Не удалось назначить заказ ${order.id}:`, errorMsg);
+          }
           
           // Небольшая задержка между назначениями
           await new Promise(resolve => setTimeout(resolve, 300));
         } catch (err: any) {
           failed++;
-          failedOrders.push(`${order.id}: ${err.message || "Ошибка назначения"}`);
+          // Извлекаем детальное сообщение об ошибке
+          const errorMessage = err.response?.data?.rejection_reason || 
+                              err.response?.data?.reason ||
+                              err.message || 
+                              "Ошибка назначения";
+          failedOrders.push(`${order.id}: ${errorMessage}`);
           console.error(`Ошибка назначения заказа ${order.id}:`, err);
         }
       }
@@ -509,14 +523,27 @@ export function Dispatch() {
 
   const handleAssignOrder = async (orderId: string, driverId?: string) => {
     try {
-      await dispatchApi.assignOrder(orderId, driverId);
-      toast.success("Водитель успешно назначен");
-      await loadOrders();
-      setAssignModal(null);
-      setSelectedDriver(null);
+      const result = await dispatchApi.assignOrder(orderId, driverId);
+      
+      // Проверяем результат назначения
+      if (result.success && result.driver_id) {
+        toast.success("Водитель успешно назначен");
+        await loadOrders();
+        setAssignModal(null);
+        setSelectedDriver(null);
+      } else {
+        const errorMsg = result.rejection_reason || result.reason || "Не удалось назначить водителя";
+        toast.error(errorMsg);
+        setError(errorMsg);
+      }
     } catch (err: any) {
-      toast.error(err.message || "Ошибка назначения заказа");
-      setError(err.message || "Ошибка назначения заказа");
+      // Извлекаем детальное сообщение об ошибке
+      const errorMessage = err.response?.data?.rejection_reason || 
+                          err.response?.data?.reason ||
+                          err.message || 
+                          "Ошибка назначения заказа";
+      toast.error(errorMessage);
+      setError(errorMessage);
     }
   };
 

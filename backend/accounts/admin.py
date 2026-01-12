@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-from .models import User, Passenger, Driver, OTPCode
+from .models import User, Passenger, Driver, OTPCode, DriverStatistics
 
 
 @admin.register(User)
@@ -24,9 +24,43 @@ class PassengerAdmin(admin.ModelAdmin):
 
 @admin.register(Driver)
 class DriverAdmin(admin.ModelAdmin):
-    list_display = ['name', 'user', 'region', 'car_model', 'plate_number', 'is_online', 'capacity']
-    list_filter = ['region', 'is_online', 'capacity']
+    list_display = ['name', 'user', 'region', 'car_model', 'plate_number', 'is_online', 'status', 'rating', 'capacity']
+    list_filter = ['region', 'is_online', 'status', 'capacity']
     search_fields = ['name', 'user__phone', 'car_model', 'plate_number']
+    fieldsets = (
+        ('Основная информация', {
+            'fields': ('user', 'name', 'region', 'car_model', 'plate_number', 'capacity')
+        }),
+        ('Статус', {
+            'fields': ('is_online', 'status', 'rating', 'idle_since')
+        }),
+        ('Геолокация', {
+            'fields': ('current_lat', 'current_lon', 'last_location_update')
+        }),
+    )
+
+
+@admin.register(DriverStatistics)
+class DriverStatisticsAdmin(admin.ModelAdmin):
+    list_display = ['driver', 'acceptance_rate', 'cancel_rate', 'orders_last_60min', 'offers_last_60min', 'last_updated']
+    list_filter = ['last_updated']
+    search_fields = ['driver__name', 'driver__car_model']
+    readonly_fields = ['last_updated']
+    fieldsets = (
+        ('Водитель', {
+            'fields': ('driver',)
+        }),
+        ('Метрики', {
+            'fields': ('acceptance_rate', 'cancel_rate', 'orders_last_60min', 'offers_last_60min')
+        }),
+        ('Счетчики', {
+            'fields': ('rejections_count', 'cancellations_count', 'no_shows_count')
+        }),
+        ('Системная информация', {
+            'fields': ('last_updated',),
+            'classes': ('collapse',)
+        }),
+    )
 
 
 @admin.register(OTPCode)

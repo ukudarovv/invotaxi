@@ -80,6 +80,16 @@ class Passenger(models.Model):
         return self.full_name
 
 
+class DriverStatus(models.TextChoices):
+    """Статусы водителя"""
+    OFFLINE = 'offline', 'Офлайн'
+    ONLINE_IDLE = 'online_idle', 'Онлайн, свободен'
+    OFFERED = 'offered', 'Получил предложение'
+    ENROUTE_TO_PICKUP = 'enroute_to_pickup', 'Едет к подаче'
+    ON_TRIP = 'on_trip', 'В поездке'
+    PAUSED = 'paused', 'Перерыв/блокировка'
+
+
 class Driver(models.Model):
     """Модель водителя"""
     user = models.OneToOneField(
@@ -99,13 +109,25 @@ class Driver(models.Model):
     plate_number = models.CharField(max_length=20, verbose_name='Номер машины')
     capacity = models.IntegerField(default=4, verbose_name='Вместимость')
     is_online = models.BooleanField(default=False, verbose_name='Онлайн')
+    status = models.CharField(
+        max_length=30,
+        choices=DriverStatus.choices,
+        default=DriverStatus.OFFLINE,
+        verbose_name='Статус'
+    )
     current_lat = models.FloatField(null=True, blank=True, verbose_name='Текущая широта')
     current_lon = models.FloatField(null=True, blank=True, verbose_name='Текущая долгота')
     last_location_update = models.DateTimeField(null=True, blank=True, verbose_name='Последнее обновление позиции')
+    rating = models.FloatField(default=5.0, verbose_name='Рейтинг')
+    idle_since = models.DateTimeField(null=True, blank=True, verbose_name='Свободен с')
 
     class Meta:
         verbose_name = 'Водитель'
         verbose_name_plural = 'Водители'
+        indexes = [
+            models.Index(fields=['status', 'is_online']),
+            models.Index(fields=['region', 'status']),
+        ]
 
     def __str__(self):
         return f'{self.name} ({self.car_model})'
@@ -116,6 +138,47 @@ class Driver(models.Model):
         if self.current_lat is not None and self.current_lon is not None:
             return (self.current_lat, self.current_lon)
         return None
+
+
+class DriverStatistics(models.Model):
+    """Статистика водителя для алгоритма распределения"""
+    driver = models.OneToOneField(
+        Driver,
+        on_delete=models.CASCADE,
+        related_name='statistics',
+        verbose_name='Водитель'
+    )
+    # Acceptance rate (вероятность принятия оффера)
+    acceptance_rate = models.FloatField(
+        default=1.0,
+        verbose_name='Acceptance Rate',
+        help_text='Вероятность принятия предложения (0.0-1.0)'
+    )
+    # Cancel rate (вероятность отмены после принятия)
+    cancel_rate = models.FloatField(
+        default=0.0,
+        verbose_name='Cancel Rate',
+        help_text='Вероятность отмены после принятия (0.0-1.0)'
+    )
+    # Количество офферов за последние N минут
+    offers_last_60min = models.IntegerField(default=0, verbose_name='Офферов за последний час')
+    # Количество принятых заказов за последние N минут
+    orders_last_60min = models.IntegerField(default=0, verbose_name='Заказов за последний час')
+    # Количество отклонений
+    rejections_count = models.IntegerField(default=0, verbose_name='Количество отклонений')
+    # Количество отмен
+    cancellations_count = models.IntegerField(default=0, verbose_name='Количество отмен')
+    # Количество no-show
+    no_shows_count = models.IntegerField(default=0, verbose_name='Количество no-show')
+    # Последнее обновление статистики
+    last_updated = models.DateTimeField(auto_now=True, verbose_name='Последнее обновление')
+
+    class Meta:
+        verbose_name = 'Статистика водителя'
+        verbose_name_plural = 'Статистика водителей'
+
+    def __str__(self):
+        return f'Статистика {self.driver.name}'
 
 
 class UserActivityLog(models.Model):

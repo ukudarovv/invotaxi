@@ -18,20 +18,61 @@ class OrderService:
         order.status = new_status
 
         # Обновляем временные метки
+        update_fields = ['status']
         if new_status == OrderStatus.ASSIGNED and not order.assigned_at:
             order.assigned_at = timezone.now()
+            update_fields.append('assigned_at')
         elif new_status == OrderStatus.COMPLETED and not order.completed_at:
             order.completed_at = timezone.now()
+            update_fields.append('completed_at')
+        
+        # Если водитель был назначен, добавляем его в поля для обновления
+        # Проверяем, изменился ли водитель (сравниваем с текущим значением в БД)
+        driver_changed = False
+        if order.driver_id:
+            try:
+                old_order = Order.objects.get(pk=order.pk)
+                # Если водитель изменился или был None, добавляем в update_fields
+                if old_order.driver_id != order.driver_id:
+                    driver_changed = True
+            except Order.DoesNotExist:
+                # Заказ новый, driver нужно сохранить
+                driver_changed = True
+        # Также проверяем, если водитель был установлен через order.driver
+        elif hasattr(order, 'driver') and order.driver and order.driver.id:
+            # Убеждаемся, что driver_id установлен
+            if not order.driver_id:
+                order.driver_id = order.driver.id
+            driver_changed = True
+        
+        if driver_changed and 'driver' not in update_fields:
+            update_fields.append('driver')
+        
+        # Если assignment_reason был установлен, добавляем его
+        if hasattr(order, 'assignment_reason') and order.assignment_reason:
+            update_fields.append('assignment_reason')
 
-        order.save()
+        try:
+            order.save(update_fields=update_fields)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка сохранения заказа {order.id}: {str(e)}')
+            raise
 
         # Создаем событие
-        OrderEvent.objects.create(
-            order=order,
-            status_from=old_status,
-            status_to=new_status,
-            description=reason
-        )
+        try:
+            OrderEvent.objects.create(
+                order=order,
+                status_from=old_status,
+                status_to=new_status,
+                description=reason or ''
+            )
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка создания события для заказа {order.id}: {str(e)}')
+            # Не прерываем выполнение, если не удалось создать событие
 
         return order
 
@@ -45,10 +86,13 @@ class OrderService:
             OrderStatus.SUBMITTED: [
                 OrderStatus.AWAITING_DISPATCHER_DECISION,
                 OrderStatus.REJECTED,
-                OrderStatus.CANCELLED
+                OrderStatus.CANCELLED,
+                OrderStatus.CREATED,
+                OrderStatus.MATCHING,
             ],
             OrderStatus.AWAITING_DISPATCHER_DECISION: [
                 OrderStatus.ACTIVE_QUEUE,
+                OrderStatus.MATCHING,
                 OrderStatus.REJECTED,
                 OrderStatus.CANCELLED
             ],
@@ -56,12 +100,29 @@ class OrderService:
                 OrderStatus.SUBMITTED,  # Восстановление отклоненного заказа
                 OrderStatus.CANCELLED
             ],
+            OrderStatus.CREATED: [
+                OrderStatus.MATCHING,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.MATCHING: [
+                OrderStatus.OFFERED,
+                OrderStatus.ACTIVE_QUEUE,
+                OrderStatus.CANCELLED
+            ],
             OrderStatus.ACTIVE_QUEUE: [
+                OrderStatus.MATCHING,
+                OrderStatus.OFFERED,
                 OrderStatus.ASSIGNED,
+                OrderStatus.CANCELLED
+            ],
+            OrderStatus.OFFERED: [
+                OrderStatus.ASSIGNED,
+                OrderStatus.MATCHING,  # При отклонении/таймауте
                 OrderStatus.CANCELLED
             ],
             OrderStatus.ASSIGNED: [
                 OrderStatus.DRIVER_EN_ROUTE,
+                OrderStatus.MATCHING,  # При реассайне
                 OrderStatus.CANCELLED
             ],
             OrderStatus.DRIVER_EN_ROUTE: [
@@ -82,7 +143,8 @@ class OrderService:
             OrderStatus.INCIDENT: [OrderStatus.COMPLETED, OrderStatus.CANCELLED],
             OrderStatus.CANCELLED: [
                 OrderStatus.SUBMITTED,  # Восстановление отмененного заказа
-                OrderStatus.ACTIVE_QUEUE  # Восстановление в очередь
+                OrderStatus.ACTIVE_QUEUE,  # Восстановление в очередь
+                OrderStatus.MATCHING  # Восстановление для повторного поиска
             ],
         }
 
@@ -141,21 +203,53 @@ class PriceCalculator:
         
         # Если конфигурации нет, создаем дефолтную
         if not config:
-            config = PricingConfig.objects.create(
-                price_per_km=Decimal('50.00'),
-                price_per_minute_waiting=Decimal('10.00'),
-                minimum_fare=Decimal('200.00'),
-                companion_fee=Decimal('100.00'),
-                disability_category_multiplier={
-                    'I группа': Decimal('1.0'),
-                    'II группа': Decimal('1.0'),
-                    'III группа': Decimal('1.0'),
-                    'Ребенок-инвалид': Decimal('0.8')
-                },
-                night_time_multiplier=Decimal('1.2'),
-                weekend_multiplier=Decimal('1.1'),
-                is_active=True
-            )
+            try:
+                config = PricingConfig.objects.create(
+                    price_per_km=Decimal('50.00'),
+                    price_per_minute_waiting=Decimal('10.00'),
+                    minimum_fare=Decimal('200.00'),
+                    companion_fee=Decimal('100.00'),
+                    disability_category_multiplier={
+                        'I группа': 1.0,
+                        'II группа': 1.0,
+                        'III группа': 1.0,
+                        'Ребенок-инвалид': 0.8
+                    },
+                    night_time_multiplier=Decimal('1.2'),
+                    weekend_multiplier=Decimal('1.1'),
+                    is_active=True
+                )
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f'Ошибка создания конфигурации ценообразования: {str(e)}')
+                # Если не удалось создать, пробуем получить любую активную конфигурацию
+                config = PricingConfig.objects.filter(is_active=True).first()
+                if not config:
+                    raise ValueError('Не удалось создать или найти конфигурацию ценообразования')
+        
+        # Убеждаемся, что disability_category_multiplier содержит только сериализуемые типы
+        # Это важно, так как старые записи могут содержать Decimal объекты
+        if config and config.disability_category_multiplier:
+            multiplier_dict = config.disability_category_multiplier
+            needs_update = False
+            cleaned_multiplier = {}
+            for key, value in multiplier_dict.items():
+                if isinstance(value, Decimal):
+                    cleaned_multiplier[key] = float(value)
+                    needs_update = True
+                else:
+                    cleaned_multiplier[key] = value
+            # Если были изменения, обновляем конфигурацию
+            if needs_update:
+                config.disability_category_multiplier = cleaned_multiplier
+                try:
+                    config.save(update_fields=['disability_category_multiplier'])
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f'Не удалось обновить disability_category_multiplier: {str(e)}')
+                    # Продолжаем работу с очищенной версией в памяти
         
         return config
 
@@ -206,7 +300,11 @@ class PriceCalculator:
         disability_multiplier = Decimal('1.0')
         if hasattr(order.passenger, 'disability_category') and order.passenger.disability_category:
             multipliers = pricing_config.disability_category_multiplier or {}
-            disability_multiplier = Decimal(str(multipliers.get(order.passenger.disability_category, 1.0)))
+            multiplier_value = multipliers.get(order.passenger.disability_category, 1.0)
+            # Преобразуем в float, если это Decimal или другой тип
+            if isinstance(multiplier_value, Decimal):
+                multiplier_value = float(multiplier_value)
+            disability_multiplier = Decimal(str(multiplier_value))
         
         # Множитель для ночного времени
         night_multiplier = Decimal('1.0')
@@ -297,7 +395,11 @@ class PriceCalculator:
         try:
             if hasattr(order.passenger, 'disability_category') and order.passenger.disability_category:
                 multipliers = pricing_config.disability_category_multiplier or {}
-                disability_multiplier = Decimal(str(multipliers.get(order.passenger.disability_category, 1.0)))
+                multiplier_value = multipliers.get(order.passenger.disability_category, 1.0)
+                # Преобразуем в float, если это Decimal или другой тип
+                if isinstance(multiplier_value, Decimal):
+                    multiplier_value = float(multiplier_value)
+                disability_multiplier = Decimal(str(multiplier_value))
         except Exception:
             # Если не удалось получить категорию инвалидности, используем дефолтный множитель
             disability_multiplier = Decimal('1.0')

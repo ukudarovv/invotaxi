@@ -254,11 +254,27 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     loadCandidates();
   }, [assignModal, orders]);
 
+  // Helper function to safely format numbers
+  const safeToFixed = useCallback((value: any, decimals: number = 2): string => {
+    if (value === null || value === undefined) return '0.00';
+    const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+    return !isNaN(num) ? num.toFixed(decimals) : '0.00';
+  }, []);
+
+  // Helper function to safely convert to number
+  const safeToNumber = useCallback((value: any): number => {
+    if (value === null || value === undefined) return 0;
+    const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+    return !isNaN(num) ? num : 0;
+  }, []);
+
   // Helper function to format order for display (moved before useMemo that uses it)
   const formatOrderForDisplay = useCallback((order: Order) => {
     const displayStatus = statusMap[order.status] || order.status;
     const date = new Date(order.created_at);
-    const price = order.final_price || order.estimated_price;
+    const priceRaw = order.final_price || order.estimated_price || order.quote;
+    // Преобразуем price в число, если это строка или Decimal
+    const price = priceRaw ? (typeof priceRaw === 'string' ? parseFloat(priceRaw) : Number(priceRaw)) : null;
     return {
       id: order.id,
       passenger: order.passenger.full_name,
@@ -268,8 +284,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       status: displayStatus,
       time: format(date, "HH:mm"),
       date: format(date, "dd.MM.yyyy"),
-      price: price ? `${price.toFixed(2)} ₸` : "—",
-      priceValue: price || 0,
+      price: price && !isNaN(price) ? `${price.toFixed(2)} ₸` : "—",
+      priceValue: price && !isNaN(price) ? price : 0,
       distance: order.distance_km,
       order: order,
     };
@@ -997,7 +1013,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               </div>
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Расстояние</p>
-                <p className="dark:text-white">{selectedOrder.order.distance_km ? `${selectedOrder.order.distance_km.toFixed(2)} км` : "—"}</p>
+                <p className="dark:text-white">{selectedOrder.order.distance_km ? `${safeToFixed(selectedOrder.order.distance_km, 2)} км` : "—"}</p>
               </div>
             </div>
 
@@ -1076,8 +1092,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               <div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">Координаты</p>
                 <div className="text-xs dark:text-gray-300 mt-1">
-                  <p>Откуда: {selectedOrder.order.pickup_lat.toFixed(6)}, {selectedOrder.order.pickup_lon.toFixed(6)}</p>
-                  <p>Куда: {selectedOrder.order.dropoff_lat.toFixed(6)}, {selectedOrder.order.dropoff_lon.toFixed(6)}</p>
+                  <p>Откуда: {safeToFixed(selectedOrder.order.pickup_lat, 6)}, {safeToFixed(selectedOrder.order.pickup_lon, 6)}</p>
+                  <p>Куда: {safeToFixed(selectedOrder.order.dropoff_lat, 6)}, {safeToFixed(selectedOrder.order.dropoff_lon, 6)}</p>
                 </div>
               </div>
             </div>
@@ -1119,13 +1135,15 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                       {selectedOrder.order.final_price ? "Финальная стоимость" : "Предварительная стоимость"}
                     </p>
                     <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">
-                      {(selectedOrder.order.final_price || selectedOrder.order.estimated_price || 0).toFixed(2)} ₸
+                      {safeToFixed(selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸
                     </p>
                   </div>
                   {selectedOrder.order.final_price && selectedOrder.order.estimated_price && (
                     <div className="text-right">
                       <p className="text-xs text-gray-500 dark:text-gray-400">Было оценено</p>
-                      <p className="text-sm line-through text-gray-400">{selectedOrder.order.estimated_price.toFixed(2)} ₸</p>
+                      <p className="text-sm line-through text-gray-400">
+                        {safeToFixed(selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸
+                      </p>
                     </div>
                   )}
                 </div>
@@ -1138,58 +1156,58 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Детализация стоимости</p>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-gray-600 dark:text-gray-400">Расстояние ({selectedOrder.order.distance_km?.toFixed(2) || 0} км)</span>
-                    <span className="dark:text-white">{selectedOrder.order.price_breakdown.base_distance_price?.toFixed(2) || "0.00"} ₸</span>
+                    <span className="text-gray-600 dark:text-gray-400">Расстояние ({safeToFixed(selectedOrder.order.distance_km, 2)} км)</span>
+                    <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.base_distance_price)} ₸</span>
                   </div>
                   {selectedOrder.order.price_breakdown.waiting_time_price > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Ожидание ({selectedOrder.order.waiting_time_minutes || 0} мин)</span>
-                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.waiting_time_price?.toFixed(2) || "0.00"} ₸</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.waiting_time_price)} ₸</span>
                     </div>
                   )}
                   {selectedOrder.order.has_companion && selectedOrder.order.price_breakdown.companion_fee > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Доплата за сопровождение</span>
-                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.companion_fee?.toFixed(2) || "0.00"} ₸</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.companion_fee)} ₸</span>
                     </div>
                   )}
                   {selectedOrder.order.price_breakdown.disability_multiplier && selectedOrder.order.price_breakdown.disability_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Множитель категории</span>
-                      <span className="dark:text-white">×{selectedOrder.order.price_breakdown.disability_multiplier.toFixed(2)}</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.disability_multiplier)}</span>
                     </div>
                   )}
                   {selectedOrder.order.price_breakdown.night_multiplier && selectedOrder.order.price_breakdown.night_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Ночной тариф</span>
-                      <span className="dark:text-white">×{selectedOrder.order.price_breakdown.night_multiplier.toFixed(2)}</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.night_multiplier)}</span>
                     </div>
                   )}
                   {selectedOrder.order.price_breakdown.weekend_multiplier && selectedOrder.order.price_breakdown.weekend_multiplier !== 1.0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Выходной день</span>
-                      <span className="dark:text-white">×{selectedOrder.order.price_breakdown.weekend_multiplier.toFixed(2)}</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.weekend_multiplier)}</span>
                     </div>
                   )}
                   {selectedOrder.order.price_breakdown.minimum_fare_adjustment && selectedOrder.order.price_breakdown.minimum_fare_adjustment > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 dark:text-gray-400">Минимальная стоимость</span>
-                      <span className="dark:text-white">+{selectedOrder.order.price_breakdown.minimum_fare_adjustment.toFixed(2)} ₸</span>
+                      <span className="dark:text-white">+{safeToFixed(selectedOrder.order.price_breakdown.minimum_fare_adjustment)} ₸</span>
                     </div>
                   )}
                   {selectedOrder.order.price_breakdown.subtotal && (
                     <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
                       <span className="text-gray-600 dark:text-gray-400">Промежуточный итог</span>
-                      <span className="dark:text-white">{selectedOrder.order.price_breakdown.subtotal.toFixed(2)} ₸</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.subtotal)} ₸</span>
                     </div>
                   )}
                   <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700 font-semibold">
                     <span className="text-gray-900 dark:text-white">Итого</span>
                     <span className="text-xl text-green-600 dark:text-green-400">
                       {selectedOrder.order.price_breakdown.total ? 
-                        `${selectedOrder.order.price_breakdown.total.toFixed(2)} ₸` : 
-                        (selectedOrder.order.final_price || selectedOrder.order.estimated_price ? 
-                          `${(selectedOrder.order.final_price || selectedOrder.order.estimated_price || 0).toFixed(2)} ₸` : 
+                        `${safeToFixed(selectedOrder.order.price_breakdown.total)} ₸` : 
+                        (selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote ? 
+                          `${safeToFixed(selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸` : 
                           "—")}
                     </span>
                   </div>
@@ -1381,8 +1399,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                   </div>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
                         {candidate.car_model} • Вместимость: {candidate.capacity}
-                        {candidate.priority.distance !== null && (
-                          <> • {candidate.priority.distance.toFixed(1)} км</>
+                        {candidate.priority.distance !== null && candidate.priority.distance !== undefined && (
+                          <> • {safeToFixed(candidate.priority.distance, 1)} км</>
                         )}
                         {candidate.priority.region_match && (
                           <span className="ml-2 text-green-600 dark:text-green-400">✓ Регион совпадает</span>

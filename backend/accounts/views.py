@@ -282,8 +282,28 @@ class DriverViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        from django.utils import timezone
+        from accounts.models import DriverStatus
+        
         driver.is_online = bool(is_online)
-        driver.save()
+        
+        # Устанавливаем статус водителя в зависимости от is_online
+        if driver.is_online:
+            # Если водитель становится онлайн и не занят, устанавливаем ONLINE_IDLE
+            if not hasattr(driver, 'status') or driver.status in [
+                DriverStatus.OFFLINE, 
+                None
+            ] or (driver.status == DriverStatus.ON_TRIP and not driver.orders.filter(
+                status__in=['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing']
+            ).exists()):
+                driver.status = DriverStatus.ONLINE_IDLE
+                driver.idle_since = timezone.now()
+        else:
+            # Если водитель становится офлайн
+            driver.status = DriverStatus.OFFLINE
+            driver.idle_since = None
+        
+        driver.save(update_fields=['is_online', 'status', 'idle_since'])
 
         return Response(DriverSerializer(driver).data)
 

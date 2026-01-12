@@ -88,8 +88,11 @@ api.interceptors.response.use(
     // Обработка других ошибок
     if (error.response) {
       // Сервер вернул ошибку
-      const errorMessage = (error.response.data as any)?.error || 
-                          (error.response.data as any)?.detail ||
+      const responseData = error.response.data as any;
+      const errorMessage = responseData?.rejection_reason || 
+                          responseData?.reason ||
+                          responseData?.error || 
+                          responseData?.detail ||
                           error.message ||
                           'Произошла ошибка';
       

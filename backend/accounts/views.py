@@ -240,11 +240,14 @@ class DriverViewSet(viewsets.ModelViewSet):
         driver = self.get_object()
         
         # Проверяем права доступа
+        # Администраторы могут обновлять позицию любого водителя
+        # Водители могут обновлять только свою позицию
         if hasattr(request.user, 'driver') and driver.id != request.user.driver.id:
-            return Response(
-                {'error': 'Нет доступа'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            if not request.user.is_staff:
+                return Response(
+                    {'error': 'Нет доступа. Вы можете обновить только свою позицию'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         lat = request.data.get('lat')
         lon = request.data.get('lon')
@@ -255,11 +258,33 @@ class DriverViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Валидация координат
+        try:
+            lat = float(lat)
+            lon = float(lon)
+            
+            # Проверка диапазона координат (широта: -90 до 90, долгота: -180 до 180)
+            if not (-90 <= lat <= 90):
+                return Response(
+                    {'error': 'Широта должна быть в диапазоне от -90 до 90'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if not (-180 <= lon <= 180):
+                return Response(
+                    {'error': 'Долгота должна быть в диапазоне от -180 до 180'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except (ValueError, TypeError):
+            return Response(
+                {'error': 'Неверный формат координат. Требуются числа'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         from django.utils import timezone
-        driver.current_lat = float(lat)
-        driver.current_lon = float(lon)
+        driver.current_lat = lat
+        driver.current_lon = lon
         driver.last_location_update = timezone.now()
-        driver.save()
+        driver.save(update_fields=['current_lat', 'current_lon', 'last_location_update'])
 
         return Response(DriverSerializer(driver).data)
 

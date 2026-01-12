@@ -61,6 +61,7 @@ export function Dispatch() {
   const [showRoutes, setShowRoutes] = useState<boolean>(true);
   const [showCities, setShowCities] = useState<boolean>(true);
   const [showRegions, setShowRegions] = useState<boolean>(true);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
   
   // Ref для polling
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -1217,6 +1218,15 @@ export function Dispatch() {
                     />
                     <span className="text-sm dark:text-gray-300">Регионы</span>
                   </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showHeatmap}
+                      onChange={(e) => setShowHeatmap(e.target.checked)}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm dark:text-gray-300">Тепловая карта</span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -1272,6 +1282,7 @@ export function Dispatch() {
               regions={regions}
               showCities={showCities}
               showRegions={showRegions}
+              showHeatmap={showHeatmap}
             />
           </div>
         </div>
@@ -1766,6 +1777,207 @@ interface DispatchMapProps {
   regions?: Region[];
   showCities?: boolean;
   showRegions?: boolean;
+  showHeatmap?: boolean;
+}
+
+// Функция для генерации уникального цвета на основе ID заказа
+function getOrderColor(orderId: string): string {
+  // Генерируем цвет на основе хеша ID заказа
+  let hash = 0;
+  for (let i = 0; i < orderId.length; i++) {
+    hash = orderId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  // Генерируем яркий цвет в диапазоне от синего до фиолетового
+  const hue = Math.abs(hash % 180) + 200; // от 200 до 380 (синий-фиолетовый)
+  const saturation = 65 + (Math.abs(hash) % 20); // от 65 до 85
+  const lightness = 45 + (Math.abs(hash) % 15); // от 45 до 60
+  
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+}
+
+// Функция для получения номера заказа (последние цифры ID)
+function getOrderNumber(orderId: string): string {
+  // Извлекаем числовую часть из ID
+  const match = orderId.match(/\d+/);
+  if (match) {
+    const num = match[0];
+    return num.length > 4 ? num.slice(-4) : num;
+  }
+  // Если нет цифр, используем первые символы
+  return orderId.slice(-4).toUpperCase();
+}
+
+// Функция для создания кастомной SVG иконки заказа с галочкой
+function createOrderIcon(orderId: string, status: string, color?: string): L.DivIcon {
+  // Используем переданный цвет или генерируем уникальный
+  const iconColor = color || getOrderColor(orderId);
+  const orderNumber = getOrderNumber(orderId);
+  
+  // Определяем стиль галочки в зависимости от статуса
+  const isCompleted = ['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'].includes(status);
+  const isPending = ['active_queue', 'submitted', 'awaiting_dispatcher_decision'].includes(status);
+  
+  // SVG галочка
+  const checkmarkSvg = `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" fill="white" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  `;
+  
+  // SVG часы для ожидающих заказов
+  const clockSvg = `
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="12" r="10" stroke="white" stroke-width="2" fill="none"/>
+      <path d="M12 6v6l4 2" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  `;
+  
+  const iconSvg = isCompleted ? checkmarkSvg : clockSvg;
+  
+  return L.divIcon({
+    className: 'custom-order-icon',
+    html: `
+      <div style="
+        position: relative;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: ${iconColor};
+        border: 3px solid white;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.2s ease;
+      ">
+        ${iconSvg}
+        <div style="
+          position: absolute;
+          bottom: -2px;
+          right: -2px;
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          background: white;
+          border: 2px solid ${iconColor};
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: bold;
+          color: ${iconColor};
+          box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+        ">
+          ${orderNumber}
+        </div>
+      </div>
+    `,
+    iconSize: [48, 48],
+    iconAnchor: [24, 24],
+    popupAnchor: [0, -24],
+  });
+}
+
+// Функция для создания кастомной SVG иконки водителя
+function createDriverIcon(isOnline: boolean, hasActiveOrder: boolean, bearing?: number): L.DivIcon {
+  let bgColor = '#10b981'; // зеленый для онлайн
+  let emoji = '🚗';
+  
+  if (!isOnline) {
+    bgColor = '#6b7280'; // серый для оффлайн
+    emoji = '🚫';
+  } else if (hasActiveOrder) {
+    bgColor = '#ef4444'; // красный для на заказе
+    emoji = '🚕';
+  }
+  
+  // Поворот иконки по направлению движения (если указан bearing)
+  const rotation = bearing !== undefined ? `transform: rotate(${bearing}deg);` : '';
+  
+  return L.divIcon({
+    className: 'custom-driver-icon',
+    html: `
+      <div style="
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: ${bgColor};
+        border: 3px solid white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        transition: transform 0.3s ease;
+        ${rotation}
+      ">
+        ${emoji}
+      </div>
+    `,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18],
+  });
+}
+
+// Компонент легенды карты
+function MapLegend() {
+  return (
+    <div className="absolute bottom-4 right-4 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 border border-gray-200 dark:border-gray-700 z-[1000] max-w-[280px]">
+      <h3 className="text-sm font-semibold dark:text-white mb-3">Легенда карты</h3>
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="relative w-6 h-6 rounded-full bg-indigo-500 border-2 border-white shadow-sm flex items-center justify-center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="10" stroke="white" strokeWidth="2" fill="none"/>
+              <path d="M12 6v6l4 2" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <span className="dark:text-gray-300">Заказ в очереди</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative w-6 h-6 rounded-full bg-green-500 border-2 border-white shadow-sm flex items-center justify-center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" fill="white"/>
+            </svg>
+          </div>
+          <span className="dark:text-gray-300">Заказ назначен/активен</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative w-6 h-6 rounded-full bg-purple-500 border-2 border-white shadow-sm flex items-center justify-center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" fill="white"/>
+            </svg>
+            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-white border border-purple-500 text-[6px] font-bold text-purple-500 flex items-center justify-center">#</div>
+          </div>
+          <span className="dark:text-gray-300">Каждый заказ уникален</span>
+        </div>
+        <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-green-500 border-2 border-white shadow-sm flex items-center justify-center">🚗</div>
+          <span className="dark:text-gray-300">Водитель онлайн</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-red-500 border-2 border-white shadow-sm flex items-center justify-center">🚕</div>
+          <span className="dark:text-gray-300">Водитель на заказе</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-gray-500 border-2 border-white shadow-sm flex items-center justify-center">🚫</div>
+          <span className="dark:text-gray-300">Водитель оффлайн</span>
+        </div>
+        <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-1 bg-blue-500 border-dashed border-2 border-blue-500"></div>
+          <span className="dark:text-gray-300">Маршрут водителя</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-1 bg-green-500"></div>
+          <span className="dark:text-gray-300">Маршрут заказа</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Функция для плавной анимации перемещения маркера
@@ -1815,7 +2027,7 @@ function highlightMarker(marker: L.Marker, duration: number = 500): void {
   }, duration);
 }
 
-function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders = true, showDrivers = true, showRoutes = true, cities = [], regions = [], showCities = true, showRegions = true }: DispatchMapProps) {
+function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders = true, showDrivers = true, showRoutes = true, cities = [], regions = [], showCities = true, showRegions = true, showHeatmap = false }: DispatchMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const orderMarkersRef = useRef<Map<string, L.Marker>>(new Map());
@@ -1827,6 +2039,7 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
   const driverClusterRef = useRef<L.MarkerClusterGroup | null>(null);
   const cityMarkersRef = useRef<Map<string, L.Marker>>(new Map());
   const regionLayersRef = useRef<Map<string, L.Layer>>(new Map());
+  const heatmapLayersRef = useRef<L.CircleMarker[]>([]);
   const previousDataRef = useRef<{ orders: Set<string>, activeOrders: Set<string>, drivers: Set<string> }>({
     orders: new Set(),
     activeOrders: new Set(),
@@ -1870,20 +2083,74 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     }).addTo(mapInstanceRef.current);
 
-    // Инициализируем кластеры
+    // Инициализируем кластеры с улучшенными настройками
     orderClusterRef.current = (L as any).markerClusterGroup({
-      maxClusterRadius: 50,
+      maxClusterRadius: 80,
       spiderfyOnMaxZoom: true,
-      showCoverageOnHover: false,
-      zoomToBoundsOnClick: true
+      showCoverageOnHover: true,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 15,
+      chunkedLoading: true,
+      iconCreateFunction: (cluster: any) => {
+        const count = cluster.getChildCount();
+        let size = 'small';
+        if (count > 50) size = 'large';
+        else if (count > 10) size = 'medium';
+        
+        return L.divIcon({
+          html: `<div style="
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: ${size === 'large' ? '#f97316' : size === 'medium' ? '#fbbf24' : '#10b981'};
+            border: 3px solid white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+          ">${count}</div>`,
+          className: 'marker-cluster-custom',
+          iconSize: [40, 40],
+        });
+      }
     });
     orderClusterRef.current.addTo(mapInstanceRef.current);
 
     driverClusterRef.current = (L as any).markerClusterGroup({
-      maxClusterRadius: 50,
+      maxClusterRadius: 80,
       spiderfyOnMaxZoom: true,
-      showCoverageOnHover: false,
-      zoomToBoundsOnClick: true
+      showCoverageOnHover: true,
+      zoomToBoundsOnClick: true,
+      disableClusteringAtZoom: 15,
+      chunkedLoading: true,
+      iconCreateFunction: (cluster: any) => {
+        const count = cluster.getChildCount();
+        let size = 'small';
+        if (count > 30) size = 'large';
+        else if (count > 10) size = 'medium';
+        
+        return L.divIcon({
+          html: `<div style="
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: ${size === 'large' ? '#3b82f6' : size === 'medium' ? '#60a5fa' : '#93c5fd'};
+            border: 3px solid white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+          ">${count}</div>`,
+          className: 'marker-cluster-custom',
+          iconSize: [40, 40],
+        });
+      }
     });
     driverClusterRef.current.addTo(mapInstanceRef.current);
   }, []);
@@ -1921,17 +2188,8 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       const existingMarker = orderMarkersRef.current.get(orderId);
       const isActiveOrder = activeOrders.some(o => String(o.id) === orderId);
       
-      // Определяем цвет маркера в зависимости от статуса
-      let iconColor = 'orange'; // По умолчанию для заказов в очереди
-      if (isActiveOrder) {
-        const status = order.status;
-        if (status === 'assigned') iconColor = 'blue';
-        else if (status === 'driver_en_route') iconColor = 'violet';
-        else if (status === 'ride_ongoing') iconColor = 'green';
-        else if (status === 'arrived_waiting') iconColor = 'yellow';
-        else iconColor = 'blue';
-      }
-      const iconUrl = `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${iconColor}.png`;
+      // Создаем уникальную иконку для каждого заказа с галочкой
+      const customIcon = createOrderIcon(orderId, order.status);
 
       if (existingMarker) {
         // Обновляем существующий маркер
@@ -1941,19 +2199,14 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         
         // Обновляем позицию только если она изменилась
         if (Math.abs(currentPos.lat - newPos[0]) > 0.0001 || Math.abs(currentPos.lng - newPos[1]) > 0.0001) {
-          existingMarker.setLatLng(newPos);
+          animateMarker(existingMarker, newPos, 500);
           wasUpdated = true;
         }
 
         // Обновляем иконку если статус изменился
-        const currentIconUrl = (existingMarker.options.icon as L.Icon)?.options.iconUrl || '';
-        if (!currentIconUrl.includes(iconColor)) {
-          existingMarker.setIcon(L.icon({
-            iconUrl,
-            iconSize: [25, 41],
-            iconAnchor: [12, 41],
-            popupAnchor: [1, -34],
-          }));
+        const currentIcon = existingMarker.options.icon;
+        if (!currentIcon || (currentIcon as L.DivIcon).options.html !== customIcon.options.html) {
+          existingMarker.setIcon(customIcon);
           wasUpdated = true;
         }
 
@@ -1962,9 +2215,11 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
           highlightMarker(existingMarker);
         }
 
-        // Обновляем popup с улучшенной информацией
+        // Обновляем popup с расширенной информацией
         const statusLabels: Record<string, string> = {
           'active_queue': 'В очереди',
+          'submitted': 'Отправлен',
+          'awaiting_dispatcher_decision': 'Ожидает решения',
           'assigned': 'Назначен',
           'driver_en_route': 'Водитель в пути',
           'arrived_waiting': 'Водитель прибыл',
@@ -1972,52 +2227,72 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         };
         const statusLabel = statusLabels[order.status] || order.status;
         
+        // Вычисляем время ожидания
+        const waitTime = order.created_at 
+          ? Math.round((Date.now() - new Date(order.created_at).getTime()) / 1000 / 60)
+          : 0;
+        const waitTimeText = waitTime > 60 
+          ? `${Math.floor(waitTime / 60)} ч ${waitTime % 60} мин`
+          : `${waitTime} мин`;
+        
+        const waitTimeColor = waitTime > 30 ? '#ef4444' : waitTime > 15 ? '#f97316' : '#10b981';
+        
         const popupContent = isActiveOrder
           ? `
-            <div style="min-width: 220px;">
-              <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">Активный заказ ${order.id}</h3>
-              <div style="margin-bottom: 8px; padding: 6px; background: #f3f4f6; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: #3b82f6;">${statusLabel}</span></p>
+            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+                <span style="display: inline-block; padding: 4px 8px; background: #3b82f6; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
               </div>
-              ${order.pickup_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">📍 От: ${order.pickup_title}</p>` : ''}
-              ${order.dropoff_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🎯 До: ${order.dropoff_title}</p>` : ''}
-              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                      style="margin-top: 8px; padding: 6px 12px; background: #4f46e5; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
-                Детали заказа
-              </button>
+              <div style="margin-bottom: 8px; padding: 8px; background: #f3f4f6; border-radius: 6px;">
+                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+                <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
+                ${order.driver?.car_model ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Машина: ${order.driver.car_model}</p>` : ''}
+              </div>
+              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
+                  📋 Просмотреть детали
+                </button>
+              </div>
             </div>
           `
           : `
-            <div style="min-width: 220px;">
-              <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">Заказ ${order.id}</h3>
-              <div style="margin-bottom: 8px; padding: 6px; background: #fef3c7; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: #f59e0b;">${statusLabel}</span></p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+                <span style="display: inline-block; padding: 4px 8px; background: #f59e0b; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
               </div>
-              ${order.pickup_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">📍 От: ${order.pickup_title}</p>` : ''}
-              ${order.dropoff_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🎯 До: ${order.dropoff_title}</p>` : ''}
-              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                      style="margin-top: 8px; padding: 6px 12px; background: #4f46e5; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
-                Детали заказа
-              </button>
+              <div style="margin-bottom: 8px; padding: 8px; background: #fef3c7; border-radius: 6px;">
+                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+                <p style="margin: 4px 0; font-size: 12px; color: ${waitTimeColor};"><strong>⏱️ Ожидание:</strong> ${waitTimeText}</p>
+              </div>
+              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+              ${order.seats_needed > 1 ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">💺 Мест: ${order.seats_needed}</p>` : ''}
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
+                  📋 Просмотреть детали
+                </button>
+              </div>
             </div>
           `;
         existingMarker.setPopupContent(popupContent);
       } else {
-        // Создаем новый маркер
+        // Создаем новый маркер с кастомной иконкой
         const marker = L.marker([order.pickup_lat, order.pickup_lon], {
-          icon: L.icon({
-            iconUrl,
-            iconSize: [25, 41],
-            iconAnchor: [12, 41],
-            popupAnchor: [1, -34],
-          })
+          icon: customIcon
         });
 
         const statusLabels: Record<string, string> = {
           'active_queue': 'В очереди',
+          'submitted': 'Отправлен',
+          'awaiting_dispatcher_decision': 'Ожидает решения',
           'assigned': 'Назначен',
           'driver_en_route': 'Водитель в пути',
           'arrived_waiting': 'Водитель прибыл',
@@ -2025,36 +2300,59 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         };
         const statusLabel = statusLabels[order.status] || order.status;
         
+        // Вычисляем время ожидания
+        const waitTime = order.created_at 
+          ? Math.round((Date.now() - new Date(order.created_at).getTime()) / 1000 / 60)
+          : 0;
+        const waitTimeText = waitTime > 60 
+          ? `${Math.floor(waitTime / 60)} ч ${waitTime % 60} мин`
+          : `${waitTime} мин`;
+        
+        const waitTimeColor = waitTime > 30 ? '#ef4444' : waitTime > 15 ? '#f97316' : '#10b981';
+        
         const popupContent = isActiveOrder
           ? `
-            <div style="min-width: 220px;">
-              <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">Активный заказ ${order.id}</h3>
-              <div style="margin-bottom: 8px; padding: 6px; background: #f3f4f6; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: #3b82f6;">${statusLabel}</span></p>
+            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+                <span style="display: inline-block; padding: 4px 8px; background: #3b82f6; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
               </div>
-              ${order.pickup_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">📍 От: ${order.pickup_title}</p>` : ''}
-              ${order.dropoff_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🎯 До: ${order.dropoff_title}</p>` : ''}
-              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                      style="margin-top: 8px; padding: 6px 12px; background: #4f46e5; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
-                Детали заказа
-              </button>
+              <div style="margin-bottom: 8px; padding: 8px; background: #f3f4f6; border-radius: 6px;">
+                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+                <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
+                ${order.driver?.car_model ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Машина: ${order.driver.car_model}</p>` : ''}
+              </div>
+              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
+                  📋 Просмотреть детали
+                </button>
+              </div>
             </div>
           `
           : `
-            <div style="min-width: 220px;">
-              <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">Заказ ${order.id}</h3>
-              <div style="margin-bottom: 8px; padding: 6px; background: #fef3c7; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: #f59e0b;">${statusLabel}</span></p>
-                <p style="margin: 2px 0; font-size: 12px;"><strong>Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+                <span style="display: inline-block; padding: 4px 8px; background: #f59e0b; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
               </div>
-              ${order.pickup_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">📍 От: ${order.pickup_title}</p>` : ''}
-              ${order.dropoff_title ? `<p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🎯 До: ${order.dropoff_title}</p>` : ''}
-              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                      style="margin-top: 8px; padding: 6px 12px; background: #4f46e5; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%;">
-                Детали заказа
-              </button>
+              <div style="margin-bottom: 8px; padding: 8px; background: #fef3c7; border-radius: 6px;">
+                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+                <p style="margin: 4px 0; font-size: 12px; color: ${waitTimeColor};"><strong>⏱️ Ожидание:</strong> ${waitTimeText}</p>
+              </div>
+              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+              ${order.seats_needed > 1 ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">💺 Мест: ${order.seats_needed}</p>` : ''}
+              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
+                  📋 Просмотреть детали
+                </button>
+              </div>
             </div>
           `;
 
@@ -2144,16 +2442,25 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
           animateMarker(existingMarker, newPos, 1000); // 1 секунда для плавной анимации
         }
 
-        // Определяем цвет маркера водителя в зависимости от статуса
-        let driverIconColor = 'green';
+        // Определяем статус водителя
         const hasActiveOrder = activeOrders.some(o => o.driver_id === driverId);
-        if (!driver.is_online) {
-          driverIconColor = 'grey';
-        } else if (hasActiveOrder) {
-          driverIconColor = 'red';
+        const activeOrder = activeOrders.find(o => o.driver_id === driverId);
+        
+        // Вычисляем bearing (направление) если есть предыдущая позиция
+        let bearing: number | undefined;
+        const prevPos = (existingMarker as any).__prevPos;
+        if (prevPos && driver.current_lat && driver.current_lon) {
+          const lat1 = prevPos.lat * Math.PI / 180;
+          const lat2 = driver.current_lat * Math.PI / 180;
+          const dLon = (driver.current_lon - prevPos.lng) * Math.PI / 180;
+          const y = Math.sin(dLon) * Math.cos(lat2);
+          const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+          bearing = Math.atan2(y, x) * 180 / Math.PI;
         }
         
-        // Обновляем popup с дополнительной информацией
+        const customDriverIcon = createDriverIcon(driver.is_online, hasActiveOrder, bearing);
+        
+        // Обновляем popup с расширенной информацией
         const lastUpdate = driver.last_location_update 
           ? new Date(driver.last_location_update).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
           : 'Неизвестно';
@@ -2161,56 +2468,59 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         // Получаем ETA если есть
         const etaInfo = (driver as any).eta;
         const etaText = etaInfo 
-          ? `<p style="margin: 4px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6;">~${etaInfo.duration_minutes} мин</span></p>
-             <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>`
+          ? `<div style="margin: 6px 0; padding: 6px; background: #dbeafe; border-radius: 4px;">
+               <p style="margin: 2px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6; font-weight: 600;">~${etaInfo.duration_minutes} мин</span></p>
+               <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">📏 Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>
+             </div>`
           : '';
         
         const popupContent = `
-          <div style="min-width: 200px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">${driver.name}</h3>
-            <div style="margin-bottom: 8px; padding: 6px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 4px;">
-              <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: ${driver.is_online ? '#10b981' : '#6b7280'};">${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}</span></p>
-              ${hasActiveOrder ? '<p style="margin: 2px 0; font-size: 11px; color: #dc2626;">🚗 На заказе</p>' : ''}
+          <div style="min-width: 260px; font-family: system-ui, -apple-system, sans-serif;">
+            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">${driver.name}</h3>
+              <span style="display: inline-block; padding: 4px 8px; background: ${driver.is_online ? '#10b981' : '#6b7280'}; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">
+                ${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}
+              </span>
+              ${hasActiveOrder ? '<span style="display: inline-block; margin-left: 4px; padding: 4px 8px; background: #ef4444; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">🚕 На заказе</span>' : ''}
             </div>
-            <p style="margin: 4px 0; font-size: 12px;"><strong>Машина:</strong> ${driver.car_model}</p>
-            <p style="margin: 4px 0; font-size: 12px;"><strong>Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
+            <div style="margin-bottom: 8px; padding: 8px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Машина:</strong> ${driver.car_model || 'Не указана'}</p>
+              ${driver.plate_number ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Номер: ${driver.plate_number}</p>` : ''}
+              <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
+              ${driver.capacity ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">💺 Вместимость: ${driver.capacity} мест</p>` : ''}
+            </div>
             ${etaText}
-            <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
+            ${activeOrder ? `
+              <div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;">
+                <p style="margin: 2px 0; font-size: 12px;"><strong>📦 Активный заказ:</strong> #${activeOrder.id.split('_')[1] || activeOrder.id}</p>
+                <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Пассажир: ${activeOrder.passenger?.full_name || 'Не указан'}</p>
+              </div>
+            ` : ''}
+            <p style="margin: 6px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
+            ${driver.current_lat && driver.current_lon ? `<p style="margin: 4px 0; font-size: 10px; color: #9ca3af;">Координаты: ${driver.current_lat.toFixed(6)}, ${driver.current_lon.toFixed(6)}</p>` : ''}
           </div>
         `;
         
         // Обновляем иконку водителя если нужно
-        if (existingMarker) {
-          const currentIconUrl = (existingMarker.options.icon as L.Icon)?.options.iconUrl || '';
-          const newIconUrl = `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${driverIconColor}.png`;
-          if (!currentIconUrl.includes(driverIconColor)) {
-            existingMarker.setIcon(L.icon({
-              iconUrl: newIconUrl,
-              iconSize: [25, 41],
-              iconAnchor: [12, 41],
-              popupAnchor: [1, -34],
-            }));
-          }
+        const currentIcon = existingMarker.options.icon;
+        if (!currentIcon || (currentIcon as L.DivIcon).options.html !== customDriverIcon.options.html) {
+          existingMarker.setIcon(customDriverIcon);
         }
+        
+        // Сохраняем текущую позицию для вычисления bearing
+        (existingMarker as any).__prevPos = { lat: driver.current_lat, lng: driver.current_lon };
+        
         existingMarker.setPopupContent(popupContent);
       } else {
-        // Определяем цвет маркера водителя
-        let driverIconColor = 'green';
+        // Определяем статус водителя
         const hasActiveOrder = activeOrders.some(o => o.driver_id === driverId);
-        if (!driver.is_online) {
-          driverIconColor = 'grey';
-        } else if (hasActiveOrder) {
-          driverIconColor = 'red';
-        }
+        const activeOrder = activeOrders.find(o => o.driver_id === driverId);
+        
+        const customDriverIcon = createDriverIcon(driver.is_online, hasActiveOrder);
         
         // Создаем новый маркер водителя
         const marker = L.marker(newPos, {
-          icon: L.icon({
-            iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${driverIconColor}.png`,
-            iconSize: [25, 41],
-            iconAnchor: [12, 41],
-            popupAnchor: [1, -34],
-          })
+          icon: customDriverIcon
         });
 
         const lastUpdate = driver.last_location_update 
@@ -2220,25 +2530,42 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         // Получаем ETA если есть
         const etaInfo = (driver as any).eta;
         const etaText = etaInfo 
-          ? `<p style="margin: 4px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6;">~${etaInfo.duration_minutes} мин</span></p>
-             <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>`
+          ? `<div style="margin: 6px 0; padding: 6px; background: #dbeafe; border-radius: 4px;">
+               <p style="margin: 2px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6; font-weight: 600;">~${etaInfo.duration_minutes} мин</span></p>
+               <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">📏 Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>
+             </div>`
           : '';
         
         const popupContent = `
-          <div style="min-width: 200px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">${driver.name}</h3>
-            <div style="margin-bottom: 8px; padding: 6px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 4px;">
-              <p style="margin: 2px 0; font-size: 12px;"><strong>Статус:</strong> <span style="color: ${driver.is_online ? '#10b981' : '#6b7280'};">${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}</span></p>
-              ${hasActiveOrder ? '<p style="margin: 2px 0; font-size: 11px; color: #dc2626;">🚗 На заказе</p>' : ''}
+          <div style="min-width: 260px; font-family: system-ui, -apple-system, sans-serif;">
+            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">${driver.name}</h3>
+              <span style="display: inline-block; padding: 4px 8px; background: ${driver.is_online ? '#10b981' : '#6b7280'}; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">
+                ${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}
+              </span>
+              ${hasActiveOrder ? '<span style="display: inline-block; margin-left: 4px; padding: 4px 8px; background: #ef4444; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">🚕 На заказе</span>' : ''}
             </div>
-            <p style="margin: 4px 0; font-size: 12px;"><strong>Машина:</strong> ${driver.car_model}</p>
-            <p style="margin: 4px 0; font-size: 12px;"><strong>Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
+            <div style="margin-bottom: 8px; padding: 8px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Машина:</strong> ${driver.car_model || 'Не указана'}</p>
+              ${driver.plate_number ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Номер: ${driver.plate_number}</p>` : ''}
+              <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
+              ${driver.capacity ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">💺 Вместимость: ${driver.capacity} мест</p>` : ''}
+            </div>
             ${etaText}
-            <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
+            ${activeOrder ? `
+              <div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;">
+                <p style="margin: 2px 0; font-size: 12px;"><strong>📦 Активный заказ:</strong> #${activeOrder.id.split('_')[1] || activeOrder.id}</p>
+                <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Пассажир: ${activeOrder.passenger?.full_name || 'Не указан'}</p>
+              </div>
+            ` : ''}
+            <p style="margin: 6px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
+            ${driver.current_lat && driver.current_lon ? `<p style="margin: 4px 0; font-size: 10px; color: #9ca3af;">Координаты: ${driver.current_lat.toFixed(6)}, ${driver.current_lon.toFixed(6)}</p>` : ''}
           </div>
         `;
 
         marker.bindPopup(popupContent);
+        // Сохраняем текущую позицию для вычисления bearing
+        (marker as any).__prevPos = { lat: driver.current_lat, lng: driver.current_lon };
         driverMarkersRef.current.set(driverId, marker);
         
         // Добавляем маркер в кластер
@@ -2269,7 +2596,7 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     previousDataRef.current.drivers = currentDriverIds;
   }, [drivers]);
 
-  // Отображение маршрутов водителей до активных заказов
+  // Отображение маршрутов водителей до активных заказов с улучшенной визуализацией
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     if (!showRoutes) {
@@ -2298,10 +2625,27 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         if (!existingRoute && cachedRoute) {
           const polyline = L.polyline(cachedRoute.route as [number, number][], {
             color: '#3b82f6',
-            weight: 4,
-            opacity: 0.7,
-            dashArray: '10, 10'
+            weight: 5,
+            opacity: 0.8,
+            dashArray: '15, 10',
+            lineCap: 'round',
+            lineJoin: 'round'
           }).addTo(mapInstanceRef.current);
+          
+          // Добавляем стрелки направления (упрощенная версия)
+          const routePoints = cachedRoute.route as [number, number][];
+          if (routePoints.length > 1) {
+            const midPoint = routePoints[Math.floor(routePoints.length / 2)];
+            const directionMarker = L.marker(midPoint, {
+              icon: L.divIcon({
+                className: 'route-direction-marker',
+                html: '<div style="font-size: 20px; transform: rotate(45deg);">➤</div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+              })
+            }).addTo(mapInstanceRef.current);
+            (polyline as any).directionMarker = directionMarker;
+          }
           
           driverRoutesRef.current.set(routeKey, polyline);
         }
@@ -2317,21 +2661,45 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         const existingRoute = driverRoutesRef.current.get(routeKey);
         if (existingRoute) {
           existingRoute.remove();
+          if ((existingRoute as any).directionMarker) {
+            (existingRoute as any).directionMarker.remove();
+          }
         }
         
-        // Создаем новый маршрут
+        // Создаем новый маршрут с улучшенным стилем
         const polyline = L.polyline(routeData.route as [number, number][], {
           color: '#3b82f6',
-          weight: 4,
-          opacity: 0.7,
-          dashArray: '10, 10'
+          weight: 5,
+          opacity: 0.8,
+          dashArray: '15, 10',
+          lineCap: 'round',
+          lineJoin: 'round'
         }).addTo(mapInstanceRef.current);
         
+        // Добавляем стрелки направления
+        const routePoints = routeData.route as [number, number][];
+        if (routePoints.length > 1) {
+          const midPoint = routePoints[Math.floor(routePoints.length / 2)];
+          const directionMarker = L.marker(midPoint, {
+            icon: L.divIcon({
+              className: 'route-direction-marker',
+              html: '<div style="font-size: 20px; color: #3b82f6; transform: rotate(45deg);">➤</div>',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+            })
+          }).addTo(mapInstanceRef.current);
+          (polyline as any).directionMarker = directionMarker;
+        }
+        
         polyline.bindPopup(`
-          <div style="min-width: 150px;">
-            <h4 style="margin: 0 0 8px 0; font-weight: 600;">Маршрут водителя</h4>
-            <p style="margin: 4px 0; font-size: 12px;">Расстояние: ${routeData.distance_km.toFixed(2)} км</p>
-            <p style="margin: 4px 0; font-size: 12px;">Время в пути: ~${routeData.duration_minutes} мин</p>
+          <div style="min-width: 200px; font-family: system-ui, -apple-system, sans-serif;">
+            <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">🚗 Маршрут водителя</h4>
+            <div style="padding: 8px; background: #dbeafe; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
+              <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
+              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
+            </div>
+            ${driver.name ? `<p style="margin: 8px 0 0 0; font-size: 12px; color: #6b7280;">Водитель: ${driver.name}</p>` : ''}
           </div>
         `);
         
@@ -2350,15 +2718,19 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       
       if (!orderExists) {
         route.remove();
+        if ((route as any).directionMarker) {
+          (route as any).directionMarker.remove();
+        }
         driverRoutesRef.current.delete(key);
         routeCacheRef.current.delete(key);
       }
     });
-  }, [activeOrders, drivers]);
+  }, [activeOrders, drivers, showRoutes]);
 
-  // Отображение маршрутов заказов (от точки забора до высадки)
+  // Отображение маршрутов заказов (от точки забора до высадки) с улучшенной визуализацией
   useEffect(() => {
     if (!mapInstanceRef.current) return;
+    if (!showRoutes) return;
 
     const ordersWithDropoff = activeOrders.filter(o => 
       o.pickup_lat && o.pickup_lon && o.dropoff_lat && o.dropoff_lon
@@ -2375,9 +2747,26 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         if (!existingRoute && cachedRoute) {
           const polyline = L.polyline(cachedRoute.route as [number, number][], {
             color: '#10b981',
-            weight: 4,
-            opacity: 0.7
+            weight: 5,
+            opacity: 0.8,
+            lineCap: 'round',
+            lineJoin: 'round'
           }).addTo(mapInstanceRef.current);
+          
+          // Добавляем стрелки направления
+          const routePoints = cachedRoute.route as [number, number][];
+          if (routePoints.length > 1) {
+            const midPoint = routePoints[Math.floor(routePoints.length / 2)];
+            const directionMarker = L.marker(midPoint, {
+              icon: L.divIcon({
+                className: 'route-direction-marker',
+                html: '<div style="font-size: 20px; color: #10b981; transform: rotate(45deg);">➤</div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10],
+              })
+            }).addTo(mapInstanceRef.current);
+            (polyline as any).directionMarker = directionMarker;
+          }
           
           orderRoutesRef.current.set(routeKey, polyline);
         }
@@ -2393,22 +2782,49 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
         const existingRoute = orderRoutesRef.current.get(routeKey);
         if (existingRoute) {
           existingRoute.remove();
+          if ((existingRoute as any).directionMarker) {
+            (existingRoute as any).directionMarker.remove();
+          }
         }
         
-        // Создаем новый маршрут
+        // Создаем новый маршрут с улучшенным стилем
         const polyline = L.polyline(routeData.route as [number, number][], {
           color: '#10b981',
-          weight: 4,
-          opacity: 0.7
+          weight: 5,
+          opacity: 0.8,
+          lineCap: 'round',
+          lineJoin: 'round'
         }).addTo(mapInstanceRef.current);
         
+        // Добавляем стрелки направления
+        const routePoints = routeData.route as [number, number][];
+        if (routePoints.length > 1) {
+          const midPoint = routePoints[Math.floor(routePoints.length / 2)];
+          const directionMarker = L.marker(midPoint, {
+            icon: L.divIcon({
+              className: 'route-direction-marker',
+              html: '<div style="font-size: 20px; color: #10b981; transform: rotate(45deg);">➤</div>',
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+            })
+          }).addTo(mapInstanceRef.current);
+          (polyline as any).directionMarker = directionMarker;
+        }
+        
         polyline.bindPopup(`
-          <div style="min-width: 150px;">
-            <h4 style="margin: 0 0 8px 0; font-weight: 600;">Маршрут заказа</h4>
-            <p style="margin: 4px 0; font-size: 12px;">От: ${order.pickup_title}</p>
-            <p style="margin: 4px 0; font-size: 12px;">До: ${order.dropoff_title}</p>
-            <p style="margin: 4px 0; font-size: 12px;">Расстояние: ${routeData.distance_km.toFixed(2)} км</p>
-            <p style="margin: 4px 0; font-size: 12px;">Время в пути: ~${routeData.duration_minutes} мин</p>
+          <div style="min-width: 220px; font-family: system-ui, -apple-system, sans-serif;">
+            <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">📦 Маршрут заказа</h4>
+            <div style="margin-bottom: 8px; padding: 6px; background: #d1fae5; border-radius: 4px;">
+              <p style="margin: 2px 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p>
+            </div>
+            <div style="margin-bottom: 8px; padding: 6px; background: #fee2e2; border-radius: 4px;">
+              <p style="margin: 2px 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p>
+            </div>
+            <div style="padding: 8px; background: #d1fae5; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
+              <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
+              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
+            </div>
           </div>
         `);
         
@@ -2425,11 +2841,14 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       
       if (!orderExists) {
         route.remove();
+        if ((route as any).directionMarker) {
+          (route as any).directionMarker.remove();
+        }
         orderRoutesRef.current.delete(key);
         routeCacheRef.current.delete(key);
       }
     });
-  }, [activeOrders]);
+  }, [activeOrders, showRoutes]);
 
   // Отображение городов на карте
   useEffect(() => {
@@ -2606,15 +3025,91 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     });
   }, [regions, showRegions]);
 
+  // Отображение тепловой карты спроса (упрощенная версия через CircleMarker)
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+    
+    if (!showHeatmap) {
+      // Скрываем тепловую карту
+      heatmapLayersRef.current.forEach(layer => layer.remove());
+      heatmapLayersRef.current = [];
+      return;
+    }
+
+    // Создаем данные для тепловой карты на основе заказов
+    const allOrders = [...orders, ...activeOrders];
+    const orderLocations = allOrders
+      .filter(o => o.pickup_lat && o.pickup_lon)
+      .map(o => ({ lat: o.pickup_lat!, lon: o.pickup_lon! }));
+
+    // Группируем заказы по близости для визуализации плотности
+    const groupedLocations = new Map<string, { lat: number; lon: number; count: number }>();
+    const clusterRadius = 0.01; // примерно 1км
+
+    orderLocations.forEach(loc => {
+      const key = `${Math.round(loc.lat / clusterRadius)}_${Math.round(loc.lon / clusterRadius)}`;
+      const existing = groupedLocations.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        groupedLocations.set(key, { ...loc, count: 1 });
+      }
+    });
+
+    // Удаляем старые слои
+    heatmapLayersRef.current.forEach(layer => layer.remove());
+    heatmapLayersRef.current = [];
+
+    // Создаем круги для визуализации плотности
+    groupedLocations.forEach((location) => {
+      const intensity = Math.min(location.count / 5, 1); // нормализуем до 1
+      const radius = 200 + (intensity * 300); // радиус от 200 до 500 метров
+      
+      // Цвет в зависимости от интенсивности
+      const hue = 240 - (intensity * 180); // от синего (240) до красного (60)
+      const color = `hsl(${hue}, 70%, 50%)`;
+      
+      const circle = L.circleMarker([location.lat, location.lon], {
+        radius: radius / 10, // конвертируем метры в пиксели для circleMarker
+        fillColor: color,
+        color: color,
+        weight: 2,
+        opacity: 0.6,
+        fillOpacity: 0.3,
+      }).addTo(mapInstanceRef.current);
+
+      circle.bindPopup(`
+        <div style="min-width: 150px; font-family: system-ui, -apple-system, sans-serif;">
+          <h4 style="margin: 0 0 8px 0; font-weight: 600; font-size: 14px;">🔥 Тепловая карта</h4>
+          <p style="margin: 4px 0; font-size: 13px;"><strong>Заказов в зоне:</strong> ${location.count}</p>
+          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Интенсивность: ${Math.round(intensity * 100)}%</p>
+        </div>
+      `);
+
+      heatmapLayersRef.current.push(circle);
+    });
+  }, [orders, activeOrders, showHeatmap]);
+
   // Очистка при размонтировании
   useEffect(() => {
     return () => {
       orderMarkersRef.current.forEach(marker => marker.remove());
       driverMarkersRef.current.forEach(marker => marker.remove());
-      driverRoutesRef.current.forEach(route => route.remove());
-      orderRoutesRef.current.forEach(route => route.remove());
+      driverRoutesRef.current.forEach(route => {
+        route.remove();
+        if ((route as any).directionMarker) {
+          (route as any).directionMarker.remove();
+        }
+      });
+      orderRoutesRef.current.forEach(route => {
+        route.remove();
+        if ((route as any).directionMarker) {
+          (route as any).directionMarker.remove();
+        }
+      });
       cityMarkersRef.current.forEach(marker => marker.remove());
       regionLayersRef.current.forEach(layer => layer.remove());
+      heatmapLayersRef.current.forEach(layer => layer.remove());
       orderMarkersRef.current.clear();
       driverMarkersRef.current.clear();
       driverRoutesRef.current.clear();
@@ -2625,5 +3120,10 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     };
   }, []);
 
-  return <div ref={mapRef} className="w-full h-full rounded-lg" />;
+  return (
+    <div className="relative w-full h-full rounded-lg">
+      <div ref={mapRef} className="w-full h-full rounded-lg" />
+      <MapLegend />
+    </div>
+  );
 }

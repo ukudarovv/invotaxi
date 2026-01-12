@@ -185,6 +185,7 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
         write_only=True,
         required=True
     )
+    username = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     
     class Meta:
         model = User
@@ -192,6 +193,8 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
     
     def validate_phone(self, value):
         """Валидация телефона"""
+        if not value:
+            raise serializers.ValidationError('Телефон обязателен')
         cleaned = value.replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
         if not cleaned.isdigit() or len(cleaned) < 10:
             raise serializers.ValidationError('Неверный формат телефона')
@@ -201,12 +204,21 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
         """Проверка уникальности телефона и email"""
         phone = attrs.get('phone')
         email = attrs.get('email')
+        username = attrs.get('username')
         
+        if not phone:
+            raise serializers.ValidationError({'phone': 'Телефон обязателен'})
+        
+        # Проверяем уникальность телефона (точное совпадение)
+        # Примечание: для более точной проверки можно нормализовать телефоны в БД
         if User.objects.filter(phone=phone).exists():
             raise serializers.ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
         
         if email and User.objects.filter(email=email).exists():
             raise serializers.ValidationError({'email': 'Пользователь с таким email уже существует'})
+        
+        if username and User.objects.filter(username=username).exists():
+            raise serializers.ValidationError({'username': 'Пользователь с таким именем пользователя уже существует'})
         
         return attrs
     
@@ -216,8 +228,20 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
         password = validated_data.pop('password')
         
         # Генерируем username если не указан
-        if not validated_data.get('username'):
-            username = validated_data.get('email', '').split('@')[0] or f"user_{validated_data.get('phone', '').replace('+', '').replace(' ', '')}"
+        username = validated_data.get('username')
+        if not username:
+            base_username = validated_data.get('email', '').split('@')[0] if validated_data.get('email') else None
+            if not base_username:
+                phone_cleaned = validated_data.get('phone', '').replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+                base_username = f"user_{phone_cleaned}"
+            
+            # Проверяем уникальность и добавляем суффикс если нужно
+            username = base_username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}_{counter}"
+                counter += 1
+            
             validated_data['username'] = username
         
         # Создаем пользователя

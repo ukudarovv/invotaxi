@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'orders',
     'dispatch',
     'websocket',
+    'analytics',
 ]
 
 MIDDLEWARE = [

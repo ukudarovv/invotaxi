@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -15,11 +15,24 @@ interface MapViewProps {
   zoom?: number;
   markerPosition?: [number, number];
   popupContent?: string;
+  draggable?: boolean;
+  onMarkerPositionChange?: (lat: number, lon: number) => void;
 }
 
-export function MapView({ center, zoom = 13, markerPosition, popupContent }: MapViewProps) {
+export function MapView({ 
+  center, 
+  zoom = 13, 
+  markerPosition, 
+  popupContent,
+  draggable = false,
+  onMarkerPositionChange
+}: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(
+    markerPosition || null
+  );
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -33,20 +46,55 @@ export function MapView({ center, zoom = 13, markerPosition, popupContent }: Map
       }).addTo(mapInstanceRef.current);
     }
 
-    // Add marker if position is provided
-    if (markerPosition && mapInstanceRef.current) {
-      const marker = L.marker(markerPosition).addTo(mapInstanceRef.current);
+    // Update map view if center changes
+    if (mapInstanceRef.current && center) {
+      mapInstanceRef.current.setView(center, zoom);
+    }
+  }, [center, zoom]);
+
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    const position = markerPosition || center;
+    
+    // Remove old marker if exists
+    if (markerRef.current) {
+      mapInstanceRef.current.removeLayer(markerRef.current);
+      markerRef.current = null;
+    }
+
+    // Add new marker
+    if (position) {
+      const marker = L.marker(position, {
+        draggable: draggable
+      }).addTo(mapInstanceRef.current);
       
       if (popupContent) {
         marker.bindPopup(popupContent);
       }
 
-      // Clean up marker on unmount
-      return () => {
-        marker.remove();
-      };
+      // Handle marker drag
+      if (draggable && onMarkerPositionChange) {
+        marker.on('dragend', (e) => {
+          const newPos = marker.getLatLng();
+          const newPosition: [number, number] = [newPos.lat, newPos.lng];
+          setCurrentPosition(newPosition);
+          onMarkerPositionChange(newPos.lat, newPos.lng);
+        });
+      }
+
+      markerRef.current = marker;
+      setCurrentPosition(position);
     }
-  }, [center, zoom, markerPosition, popupContent]);
+
+    // Clean up marker on unmount
+    return () => {
+      if (markerRef.current && mapInstanceRef.current) {
+        mapInstanceRef.current.removeLayer(markerRef.current);
+        markerRef.current = null;
+      }
+    };
+  }, [markerPosition, popupContent, draggable, onMarkerPositionChange, center]);
 
   // Cleanup map on unmount
   useEffect(() => {

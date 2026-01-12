@@ -89,10 +89,39 @@ api.interceptors.response.use(
     if (error.response) {
       // Сервер вернул ошибку
       const responseData = error.response.data as any;
+      
+      // Обработка ошибок валидации Django REST Framework (словарь с полями)
+      if (typeof responseData === 'object' && responseData !== null && !Array.isArray(responseData)) {
+        // Проверяем, есть ли поля с ошибками валидации
+        const fieldErrors: string[] = [];
+        for (const [key, value] of Object.entries(responseData)) {
+          if (Array.isArray(value)) {
+            fieldErrors.push(`${key}: ${value.join(', ')}`);
+          } else if (typeof value === 'string') {
+            fieldErrors.push(`${key}: ${value}`);
+          } else if (typeof value === 'object' && value !== null) {
+            // Вложенные ошибки
+            for (const [nestedKey, nestedValue] of Object.entries(value)) {
+              if (Array.isArray(nestedValue)) {
+                fieldErrors.push(`${key}.${nestedKey}: ${nestedValue.join(', ')}`);
+              } else {
+                fieldErrors.push(`${key}.${nestedKey}: ${nestedValue}`);
+              }
+            }
+          }
+        }
+        
+        if (fieldErrors.length > 0) {
+          return Promise.reject(new Error(fieldErrors.join('; ')));
+        }
+      }
+      
+      // Обычные ошибки
       const errorMessage = responseData?.rejection_reason || 
                           responseData?.reason ||
                           responseData?.error || 
                           responseData?.detail ||
+                          (typeof responseData === 'string' ? responseData : null) ||
                           error.message ||
                           'Произошла ошибка';
       

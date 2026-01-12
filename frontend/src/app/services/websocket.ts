@@ -357,10 +357,24 @@ class DispatchMapWebSocket {
           const shouldReconnect = closeCode === 1006 || closeCode === 1000 || closeCode === 1001;
           
           if (shouldReconnect && this.reconnectAttempts < this.maxReconnectAttempts) {
+            // Проверяем наличие токена перед попыткой переподключения
+            const token = localStorage.getItem('accessToken');
+            if (!token) {
+              console.log('No access token available. Skipping reconnection.');
+              return;
+            }
+            
             this.reconnectAttempts++;
             setTimeout(() => {
               console.log(`Reconnecting... Attempt ${this.reconnectAttempts}`);
-              this.connect().catch(console.error);
+              this.connect().catch((error) => {
+                // Не пытаемся переподключаться если нет токена
+                if (error.message === 'No access token') {
+                  console.log('No access token. Stopping reconnection attempts.');
+                  return;
+                }
+                console.error('WebSocket reconnection error:', error);
+              });
             }, this.reconnectDelay);
           } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             console.error('Max reconnection attempts reached');
@@ -371,8 +385,14 @@ class DispatchMapWebSocket {
             console.error('- Is the user staff/admin?');
           }
         };
-      } catch (error) {
+      } catch (error: any) {
         this.isConnecting = false;
+        // Не логируем ошибку "No access token" как критическую
+        if (error?.message === 'No access token') {
+          console.log('[WebSocket] No access token available. WebSocket connection skipped.');
+        } else {
+          console.error('[WebSocket] Connection error:', error);
+        }
         reject(error);
       }
     });

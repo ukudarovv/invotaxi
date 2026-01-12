@@ -48,9 +48,23 @@ class DispatchEngine:
         candidates = self._find_candidates(order)
 
         if not candidates:
+            # Получаем статистику для более информативного сообщения
+            from accounts.models import Driver, DriverStatus
+            total_drivers = Driver.objects.count()
+            online_drivers_count = Driver.objects.filter(is_online=True).count()
+            available_drivers_count = Driver.objects.filter(
+                is_online=True
+            ).exclude(
+                status__in=[DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED, DriverStatus.PAUSED]
+            ).count() if hasattr(DriverStatus, 'ON_TRIP') else online_drivers_count
+            
+            logger.warning(f'Не найдено кандидатов для заказа {order.id}. '
+                         f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}, требуется мест: {order.seats_needed}')
+            
             return AssignmentResult(
                 reason='Нет подходящих водителей',
-                rejection_reason='Нет онлайн водителей с достаточной вместимостью'
+                rejection_reason=f'Нет доступных онлайн водителей с достаточной вместимостью ({order.seats_needed} мест). '
+                              f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}'
             )
 
         # Получаем регион пассажира
@@ -88,31 +102,54 @@ class DispatchEngine:
         # Фильтруем водителей: онлайн и доступные (не в поездке, не едут к подаче, не получили оффер)
         online_drivers = Driver.objects.filter(is_online=True)
         
+        # Логируем общее количество онлайн водителей
+        total_online = online_drivers.count()
+        logger.debug(f'Найдено онлайн водителей: {total_online} для заказа {order.id}, требуется мест: {seats_needed}')
+        
         # Исключаем занятых водителей
         excluded_statuses = [DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED]
         # Используем exclude только если поле status существует
         try:
             online_drivers = online_drivers.exclude(status__in=excluded_statuses)
-        except Exception:
+            available_count = online_drivers.count()
+            logger.debug(f'После исключения занятых водителей: {available_count}')
+        except Exception as e:
             # Если поле status не существует (старая схема БД), просто используем is_online
+            logger.warning(f'Не удалось исключить водителей по статусу: {e}')
             pass
 
         candidates = []
+        capacity_filtered = 0
+        status_filtered = 0
+        
         for driver in online_drivers:
             # Проверяем вместимость
             if driver.capacity < seats_needed:
+                capacity_filtered += 1
+                logger.debug(f'Водитель {driver.id} ({driver.name}) пропущен: недостаточная вместимость ({driver.capacity} < {seats_needed})')
                 continue
             
-            # Дополнительная проверка статуса (для совместимости со старыми данными)
-            # Если статус не установлен или OFFLINE, но is_online=True, пропускаем
+            # Дополнительная проверка статуса
+            # Если статус OFFLINE, но is_online=True - это ошибка синхронизации, исправляем статус
             if hasattr(driver, 'status'):
                 if driver.status == DriverStatus.OFFLINE:
+                    # Если водитель помечен как онлайн, но статус OFFLINE - исправляем статус
+                    logger.warning(f'Водитель {driver.id} ({driver.name}) имеет is_online=True, но статус OFFLINE. Исправляем статус на ONLINE_IDLE')
+                    from django.utils import timezone
+                    driver.status = DriverStatus.ONLINE_IDLE
+                    driver.idle_since = timezone.now()
+                    driver.save(update_fields=['status', 'idle_since'])
+                elif driver.status == DriverStatus.PAUSED:
+                    # Водитель на перерыве - пропускаем
+                    status_filtered += 1
+                    logger.debug(f'Водитель {driver.id} ({driver.name}) пропущен: статус PAUSED')
                     continue
-                # Если водитель в статусе OFFERED, можно попробовать, но лучше пропустить для надежности
-                # if driver.status == DriverStatus.OFFERED:
-                #     continue
 
             candidates.append(driver)
+            logger.debug(f'Водитель {driver.id} ({driver.name}) добавлен в кандидаты. Вместимость: {driver.capacity}, статус: {getattr(driver, "status", "N/A")}')
+
+        logger.info(f'Для заказа {order.id} найдено кандидатов: {len(candidates)} из {total_online} онлайн водителей. '
+                   f'Отфильтровано по вместимости: {capacity_filtered}, по статусу: {status_filtered}')
 
         return candidates
 

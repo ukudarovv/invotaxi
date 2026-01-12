@@ -50,6 +50,11 @@ class DispatchViewSet(viewsets.ViewSet):
                 OrderStatus.ASSIGNED,  # Может быть переназначен
             ]
             if order.status in valid_statuses_for_queue:
+                # Очищаем водителя при переводе в очередь для нового назначения
+                if order.driver_id:
+                    order.driver = None
+                    order.driver_id = None
+                    order.assignment_reason = None
                 OrderService.update_status(order, OrderStatus.ACTIVE_QUEUE, 'Автоматический перевод в очередь для назначения водителя', user)
                 order.refresh_from_db()
             else:
@@ -73,6 +78,8 @@ class DispatchViewSet(viewsets.ViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
                 # Назначаем указанного водителя
+                # Важно: сначала устанавливаем driver_id, затем driver для правильной работы Django ORM
+                order.driver_id = driver.id
                 order.driver = driver
                 order.assignment_reason = f'Назначен водитель {driver.name} вручную'
                 OrderService.update_status(order, OrderStatus.ASSIGNED, order.assignment_reason, user)
@@ -109,12 +116,10 @@ class DispatchViewSet(viewsets.ViewSet):
                 driver = Driver.objects.get(id=driver_id)
                 
                 # Устанавливаем водителя и причину назначения
+                # Важно: сначала устанавливаем driver_id, затем driver для правильной работы Django ORM
+                order.driver_id = driver.id
                 order.driver = driver
                 order.assignment_reason = result.reason
-                
-                # Убеждаемся, что driver_id установлен (Django делает это автоматически, но для надежности)
-                if not order.driver_id:
-                    order.driver_id = driver.id
                 
                 # Сохраняем заказ с обновленным статусом, водителем и причиной
                 OrderService.update_status(order, OrderStatus.ASSIGNED, result.reason, user)
@@ -264,6 +269,8 @@ class DispatchViewSet(viewsets.ViewSet):
                             continue
                         
                         # Назначаем водителя
+                        # Важно: сначала устанавливаем driver_id, затем driver для правильной работы Django ORM
+                        order.driver_id = driver.id
                         order.driver = driver
                         order.assignment_reason = result.reason
                         

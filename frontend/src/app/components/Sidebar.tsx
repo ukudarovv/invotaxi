@@ -7,7 +7,6 @@ import {
   MapPin,
   Map as MapIcon,
   BarChart3,
-  Phone,
   FileText,
   Settings as SettingsIcon,
   LogOut,
@@ -27,7 +26,6 @@ type PageType =
   | "regions"
   | "map"
   | "analytics"
-  | "calls"
   | "logs"
   | "settings"
   | "ride-simulation";
@@ -42,7 +40,6 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { id: "dashboard", label: "Главная", icon: LayoutDashboard, permission: "view_dashboard" },
   { id: "orders", label: "Заказы", icon: ShoppingCart, permission: "manage_orders" },
-  { id: "calls", label: "Звонки", icon: Phone, permission: "make_calls" },
   { id: "drivers", label: "Водители", icon: Car, permission: "view_drivers" },
   { id: "passengers", label: "Пассажиры", icon: Users, permission: "view_passengers" },
   { id: "dispatch", label: "Диспетчеризация", icon: Radio, permission: "dispatch" },

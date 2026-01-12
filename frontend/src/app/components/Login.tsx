@@ -2,26 +2,10 @@ import { useState } from "react";
 import { User, Lock, LogIn, Loader2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
-const mockUsers = {
-  admin: {
-    email: "admin@invotaxi.kz",
-    password: "admin123",
-  },
-  dispatcher: {
-    email: "dispatcher@invotaxi.kz",
-    password: "dispatcher123",
-  },
-  operator: {
-    email: "operator@invotaxi.kz",
-    password: "operator123",
-  },
-};
-
 export function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [selectedRole, setSelectedRole] = useState<"admin" | "dispatcher" | "operator">("admin");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -38,13 +22,6 @@ export function Login() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const handleQuickLogin = (role: "admin" | "dispatcher" | "operator") => {
-    const mockUser = mockUsers[role];
-    setEmail(mockUser.email);
-    setPassword(mockUser.password);
-    setSelectedRole(role);
   };
 
   return (
@@ -82,48 +59,6 @@ export function Login() {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Role Selection */}
-            <div>
-              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
-                Роль пользователя
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole("admin")}
-                  className={`py-2 px-3 rounded-lg text-sm transition-all ${
-                    selectedRole === "admin"
-                      ? "bg-indigo-600 text-white shadow-lg"
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-                >
-                  Админ
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole("dispatcher")}
-                  className={`py-2 px-3 rounded-lg text-sm transition-all ${
-                    selectedRole === "dispatcher"
-                      ? "bg-indigo-600 text-white shadow-lg"
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-                >
-                  Диспетчер
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedRole("operator")}
-                  className={`py-2 px-3 rounded-lg text-sm transition-all ${
-                    selectedRole === "operator"
-                      ? "bg-indigo-600 text-white shadow-lg"
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-                >
-                  Оператор
-                </button>
-              </div>
-            </div>
-
             {/* Email */}
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
@@ -179,51 +114,6 @@ export function Login() {
               )}
             </button>
           </form>
-
-          {/* Demo Credentials */}
-          <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 text-center">
-              Быстрый вход:
-            </p>
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin("admin")}
-                className="w-full text-left p-3 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg transition-colors"
-              >
-                <p className="text-sm font-medium text-indigo-900 dark:text-indigo-300">
-                  👑 Администратор
-                </p>
-                <p className="text-xs text-indigo-600 dark:text-indigo-400">
-                  admin@invotaxi.kz / admin123
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickLogin("dispatcher")}
-                className="w-full text-left p-3 bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 rounded-lg transition-colors"
-              >
-                <p className="text-sm font-medium text-purple-900 dark:text-purple-300">
-                  📡 Диспетчер
-                </p>
-                <p className="text-xs text-purple-600 dark:text-purple-400">
-                  dispatcher@invotaxi.kz / dispatcher123
-                </p>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickLogin("operator")}
-                className="w-full text-left p-3 bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 rounded-lg transition-colors"
-              >
-                <p className="text-sm font-medium text-green-900 dark:text-green-300">
-                  📞 Оператор
-                </p>
-                <p className="text-xs text-green-600 dark:text-green-400">
-                  operator@invotaxi.kz / operator123
-                </p>
-              </button>
-            </div>
-          </div>
         </div>
 
         <p className="text-center text-indigo-100 dark:text-indigo-300 text-sm mt-6">

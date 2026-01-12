@@ -26,23 +26,38 @@ class OrderService:
             order.completed_at = timezone.now()
             update_fields.append('completed_at')
         
-        # Если водитель был назначен, добавляем его в поля для обновления
-        # Проверяем, изменился ли водитель (сравниваем с текущим значением в БД)
+        # Если водитель был назначен или очищен, добавляем его в поля для обновления
         driver_changed = False
-        if order.driver_id:
+        
+        # Сначала проверяем, если водитель был установлен через order.driver
+        if hasattr(order, 'driver') and order.driver and order.driver.id:
+            # Убеждаемся, что driver_id установлен
+            if not order.driver_id:
+                order.driver_id = order.driver.id
+            driver_changed = True
+        
+        # Проверяем изменение driver_id (включая очистку водителя)
+        if order.driver_id is not None:
             try:
                 old_order = Order.objects.get(pk=order.pk)
-                # Если водитель изменился или был None, добавляем в update_fields
+                # Если водитель изменился или был очищен (был, стал None)
                 if old_order.driver_id != order.driver_id:
                     driver_changed = True
             except Order.DoesNotExist:
                 # Заказ новый, driver нужно сохранить
                 driver_changed = True
-        # Также проверяем, если водитель был установлен через order.driver
-        elif hasattr(order, 'driver') and order.driver and order.driver.id:
-            # Убеждаемся, что driver_id установлен
-            if not order.driver_id:
-                order.driver_id = order.driver.id
+        elif hasattr(order, 'driver') and order.driver is None:
+            # Проверяем, был ли водитель ранее (очистка водителя)
+            try:
+                old_order = Order.objects.get(pk=order.pk)
+                if old_order.driver_id is not None:
+                    driver_changed = True
+            except Order.DoesNotExist:
+                pass
+        
+        # Если статус ASSIGNED и водитель установлен, всегда сохраняем водителя
+        # (даже если он не изменился, чтобы гарантировать сохранение)
+        if new_status == OrderStatus.ASSIGNED and order.driver_id is not None:
             driver_changed = True
         
         if driver_changed and 'driver' not in update_fields:

@@ -14,5 +14,9 @@ urlpatterns = [
     path('api/dispatch/', include('dispatch.urls')),
     path('api/regions/', include('regions.urls')),
     path('api/websocket/', include('websocket.urls')),
+    path('api/analytics/', include('analytics.urls')),
+    # Мобильные API endpoints
+    path('api/mobile/', include('accounts.urls_mobile')),
+    path('api/mobile/orders/', include('orders.urls_mobile')),
 ]
 

@@ -12,7 +12,6 @@ import { Dispatch } from "./components/Dispatch";
 import { Regions } from "./components/Regions";
 import { Map } from "./components/Map";
 import { Analytics } from "./components/Analytics";
-import { Calls } from "./components/Calls";
 import { Logs } from "./components/Logs";
 import { Settings } from "./components/Settings";
 import { RideSimulation } from "./components/RideSimulation";
@@ -26,7 +25,6 @@ type PageType =
   | "regions"
   | "map"
   | "analytics"
-  | "calls"
   | "logs"
   | "settings"
   | "ride-simulation";
@@ -63,8 +61,6 @@ function MainApp() {
         return <Map />;
       case "analytics":
         return <Analytics />;
-      case "calls":
-        return <Calls onNavigateToOrder={navigateToOrder} />;
       case "logs":
         return <Logs />;
       case "settings":

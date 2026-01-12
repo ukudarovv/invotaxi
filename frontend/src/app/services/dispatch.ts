@@ -102,6 +102,16 @@ export interface ETAResponse {
   duration_seconds: number;
 }
 
+export interface HeatmapDataPoint {
+  lat: number;
+  lon: number;
+  intensity: number;
+}
+
+export interface HeatmapResponse {
+  points: HeatmapDataPoint[];
+}
+
 export const dispatchApi = {
   /**
    * Получить кандидатов для заказа
@@ -174,6 +184,14 @@ export const dispatchApi = {
    */
   async getETA(driverId: string, orderId: string): Promise<ETAResponse> {
     const response = await api.get<ETAResponse>(`/dispatch/eta/${driverId}/${orderId}/`);
+    return response.data;
+  },
+
+  /**
+   * Получить данные для тепловой карты спроса
+   */
+  async getHeatmapData(): Promise<HeatmapResponse> {
+    const response = await api.get<HeatmapResponse>('/dispatch/heatmap/');
     return response.data;
   },
 };

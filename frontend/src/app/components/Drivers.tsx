@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Search, Plus, Eye, Edit, MapPin, Phone, Mail, X, Check, Car as CarIcon, Loader2, Trash2, Package } from "lucide-react";
+import { toast } from "sonner";
 import { Modal } from "./Modal";
 import { MapView } from "./MapView";
 import { driversApi, Driver, CreateDriverRequest, UpdateDriverRequest } from "../services/drivers";
@@ -23,6 +24,8 @@ export function Drivers() {
   const [driverOrders, setDriverOrders] = useState<Order[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersTab, setOrdersTab] = useState<"assigned" | "history">("assigned");
+  const [newDriverPosition, setNewDriverPosition] = useState<{ lat: number; lon: number } | null>(null);
+  const [savingLocation, setSavingLocation] = useState(false);
 
   // Состояния для редактирования
   const [editingName, setEditingName] = useState("");
@@ -1007,18 +1010,101 @@ export function Drivers() {
       {/* Map Modal */}
       <Modal
         isOpen={mapModal !== null}
-        onClose={() => setMapModal(null)}
+        onClose={() => {
+          setMapModal(null);
+          setNewDriverPosition(null);
+        }}
         title="Карта водителя"
         size="lg"
       >
         {mapDriver && (
-          <div className="h-96">
-            <MapView
-              center={mapDriver.current_position ? [mapDriver.current_position.lat, mapDriver.current_position.lon] : [43.238949, 76.945833]}
-              zoom={13}
-              markerPosition={mapDriver.current_position ? [mapDriver.current_position.lat, mapDriver.current_position.lon] : [43.238949, 76.945833]}
-              popupContent={`${mapDriver.name}<br />${mapDriver.region?.title || "Не указано"}`}
-            />
+          <div className="space-y-4">
+            <div className="h-96 relative">
+              <MapView
+                center={mapDriver.current_position ? [mapDriver.current_position.lat, mapDriver.current_position.lon] : [43.238949, 76.945833]}
+                zoom={13}
+                markerPosition={newDriverPosition ? [newDriverPosition.lat, newDriverPosition.lon] : (mapDriver.current_position ? [mapDriver.current_position.lat, mapDriver.current_position.lon] : [43.238949, 76.945833])}
+                popupContent={`${mapDriver.name}<br />${mapDriver.region?.title || "Не указано"}${newDriverPosition ? '<br /><small>Перетащите маркер для изменения</small>' : ''}`}
+                draggable={true}
+                onMarkerPositionChange={(lat, lon) => {
+                  setNewDriverPosition({ lat, lon });
+                }}
+              />
+              {newDriverPosition ? (
+                <div className="absolute top-2 left-2 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-600 rounded-lg p-2 text-sm text-yellow-800 dark:text-yellow-200 z-[1000] shadow-lg">
+                  <p className="font-medium">Новая позиция:</p>
+                  <p>Широта: {newDriverPosition.lat.toFixed(6)}</p>
+                  <p>Долгота: {newDriverPosition.lon.toFixed(6)}</p>
+                </div>
+              ) : (
+                <div className="absolute top-2 left-2 bg-blue-100 dark:bg-blue-900/30 border border-blue-400 dark:border-blue-600 rounded-lg p-2 text-sm text-blue-800 dark:text-blue-200 z-[1000] shadow-lg">
+                  <p className="font-medium flex items-center gap-1">
+                    <MapPin className="w-4 h-4" />
+                    Подсказка
+                  </p>
+                  <p className="text-xs mt-1">Перетащите маркер на карте для изменения позиции водителя</p>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+              <div className="text-sm text-gray-600 dark:text-gray-400">
+                {mapDriver.current_position ? (
+                  <>
+                    <p><strong>Текущая позиция:</strong></p>
+                    <p>Широта: {mapDriver.current_position.lat.toFixed(6)}, Долгота: {mapDriver.current_position.lon.toFixed(6)}</p>
+                  </>
+                ) : (
+                  <p>Позиция не установлена</p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                {newDriverPosition && (
+                  <>
+                    <button
+                      onClick={async () => {
+                        if (!mapModal || !newDriverPosition) return;
+                        try {
+                          setSavingLocation(true);
+                          await driversApi.updateLocation(Number(mapModal), {
+                            lat: newDriverPosition.lat,
+                            lon: newDriverPosition.lon
+                          });
+                          await refreshDrivers();
+                          setNewDriverPosition(null);
+                          toast.success("Позиция водителя успешно обновлена");
+                        } catch (err: any) {
+                          const errorMessage = err.response?.data?.error || err.message || "Ошибка сохранения позиции";
+                          setError(errorMessage);
+                          toast.error(errorMessage);
+                        } finally {
+                          setSavingLocation(false);
+                        }
+                      }}
+                      disabled={savingLocation}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                    >
+                      {savingLocation ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Сохранение...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" />
+                          Сохранить позицию
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setNewDriverPosition(null)}
+                      className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                    >
+                      Отмена
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </Modal>

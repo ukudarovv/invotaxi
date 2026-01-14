@@ -1,6 +1,7 @@
 MIT License
 
 MIT-KZ-AOOI-2026-001
+MIT-KZ-911240001611-2026-01
 
 Copyright (c) 2026
 Общественное объединение

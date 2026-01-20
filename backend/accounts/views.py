@@ -6,6 +6,10 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
 from django.db import models
+from django.http import HttpResponse
+from io import BytesIO
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 from .models import Passenger, Driver, UserActivityLog
 from regions.models import Region
 from .serializers import (
@@ -176,7 +180,7 @@ class AuthViewSet(viewsets.ViewSet):
         return Response({'message': 'Выход выполнен'}, status=status.HTTP_200_OK)
 
 
-class PassengerViewSet(viewsets.ReadOnlyModelViewSet):
+class PassengerViewSet(viewsets.ModelViewSet):
     """ViewSet для пассажиров"""
     queryset = Passenger.objects.select_related('user', 'region').all()
     serializer_class = PassengerSerializer
@@ -189,6 +193,259 @@ class PassengerViewSet(viewsets.ReadOnlyModelViewSet):
             return Passenger.objects.filter(id=user.passenger.id)
         # Админы и водители могут видеть всех
         return super().get_queryset()
+
+    def create(self, request, *args, **kwargs):
+        """Создание пассажира - только для админов"""
+        if not request.user.is_staff:
+            raise PermissionDenied('Только администраторы могут создавать пассажиров')
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Обновление пассажира - только для админов"""
+        if not request.user.is_staff:
+            raise PermissionDenied('Только администраторы могут обновлять пассажиров')
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        """Удаление пассажира - только для админов"""
+        if not request.user.is_staff:
+            raise PermissionDenied('Только администраторы могут удалять пассажиров')
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'], url_path='template')
+    def download_template(self, request):
+        """Скачивание шаблона Excel для импорта пассажиров"""
+        try:
+            # Проверяем права доступа (только админы могут скачивать шаблон)
+            if not request.user.is_staff:
+                raise PermissionDenied('Только администраторы могут скачивать шаблон')
+            
+            # Генерируем шаблон в памяти
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = 'Пассажиры'
+            
+            # Определяем заголовки колонок
+            headers = [
+                'Имя',
+                'Телефон',
+                'Email',
+                'Регион',
+                'Категория инвалидности',
+                'Разрешено сопровождение'
+            ]
+            
+            # Записываем заголовки
+            for col_idx, header in enumerate(headers, start=1):
+                cell = sheet.cell(row=1, column=col_idx)
+                cell.value = header
+                cell.font = Font(bold=True, size=12, color='FFFFFF')
+                cell.fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            # Добавляем пример данных
+            first_region = Region.objects.first()
+            region_title = first_region.title if first_region else 'Алматы'
+            
+            example_row = [
+                'Иванов Иван Иванович',
+                '+7 777 123 4567',
+                'passenger1@invotaxi.kz',
+                region_title,
+                'III группа',
+                'Нет'
+            ]
+            
+            for col_idx, value in enumerate(example_row, start=1):
+                sheet.cell(row=2, column=col_idx).value = value
+            
+            # Второй пример
+            example_row2 = [
+                'Петрова Мария Сергеевна',
+                '+7 777 765 4321',
+                'passenger2@invotaxi.kz',
+                region_title,
+                'I группа',
+                'Да'
+            ]
+            
+            for col_idx, value in enumerate(example_row2, start=1):
+                sheet.cell(row=3, column=col_idx).value = value
+            
+            # Настраиваем ширину колонок
+            column_widths = {
+                'A': 25, 'B': 18, 'C': 25, 'D': 20, 'E': 25, 'F': 22
+            }
+            for col_letter, width in column_widths.items():
+                sheet.column_dimensions[col_letter].width = width
+            
+            # Добавляем инструкцию на второй лист
+            sheet2 = workbook.create_sheet(title='Инструкция')
+            instructions = [
+                ['ПОЛЕ', 'ОБЯЗАТЕЛЬНО', 'ОПИСАНИЕ', 'ПРИМЕР'],
+                ['Имя', 'Да', 'Полное имя пассажира', 'Иванов Иван Иванович'],
+                ['Телефон', 'Да', 'Телефон в формате +7...', '+7 777 123 4567'],
+                ['Email', 'Нет', 'Email адрес (опционально)', 'passenger@invotaxi.kz'],
+                ['Регион', 'Да', 'Название региона или ID региона', 'Алматы'],
+                ['Категория инвалидности', 'Да', 'I группа, II группа, III группа, Ребенок-инвалид', 'III группа'],
+                ['Разрешено сопровождение', 'Нет', 'Да/Нет или True/False', 'Нет'],
+                ['', '', '', ''],
+                ['ПРИМЕЧАНИЯ:', '', '', ''],
+                ['1. Все обязательные поля должны быть заполнены', '', '', ''],
+                ['2. Телефон должен быть уникальным', '', '', ''],
+                ['3. Для региона можно использовать название или ID', '', '', ''],
+                ['4. Категория инвалидности должна быть одной из: I группа, II группа, III группа, Ребенок-инвалид', '', '', ''],
+                ['5. Для "Разрешено сопровождение" используйте: Да/Нет, True/False, 1/0', '', '', ''],
+            ]
+            
+            for row_idx, row_data in enumerate(instructions, start=1):
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = sheet2.cell(row=row_idx, column=col_idx)
+                    cell.value = value
+                    if row_idx == 1:
+                        cell.font = Font(bold=True, size=12, color='FFFFFF')
+                        cell.fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+                    elif row_idx == 9 and col_idx == 1:
+                        cell.font = Font(bold=True, size=11)
+            
+            sheet2.column_dimensions['A'].width = 25
+            sheet2.column_dimensions['B'].width = 12
+            sheet2.column_dimensions['C'].width = 60
+            sheet2.column_dimensions['D'].width = 30
+            
+            # Сохраняем в BytesIO
+            buffer = BytesIO()
+            workbook.save(buffer)
+            buffer.seek(0)
+            
+            # Возвращаем файл как HTTP response
+            response = HttpResponse(
+                buffer.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="шаблон_импорт_пассажиров.xlsx"'
+            return response
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка генерации шаблона: {e}', exc_info=True)
+            return Response(
+                {'error': f'Ошибка генерации шаблона: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='import')
+    def import_passengers(self, request):
+        """Импорт пассажиров из Excel файла"""
+        # Проверяем права доступа (только админы могут импортировать)
+        if not request.user.is_staff:
+            raise PermissionDenied('Только администраторы могут импортировать пассажиров')
+        
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'Файл не предоставлен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        excel_file = request.FILES['file']
+        if not excel_file.name.endswith(('.xlsx', '.xls')):
+            return Response(
+                {'error': 'Файл должен быть Excel файлом (.xlsx или .xls)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Получаем опции из запроса
+        skip_errors = request.data.get('skip_errors', 'false').lower() == 'true'
+        dry_run = request.data.get('dry_run', 'false').lower() == 'true'
+        
+        # Используем команду импорта для обработки файла
+        from accounts.management.commands.import_passengers_from_excel import Command as ImportCommand
+        import tempfile
+        import os
+        
+        # Сохраняем файл во временный файл
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            for chunk in csv_file.chunks():
+                tmp_file.write(chunk)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Создаем экземпляр команды
+            command = ImportCommand()
+            
+            # Перенаправляем вывод команды
+            from io import StringIO
+            import sys
+            
+            output_buffer = StringIO()
+            original_stdout = sys.stdout
+            sys.stdout = output_buffer
+            
+            try:
+                # Вызываем обработку файла
+                command.handle(
+                    file_path=tmp_file_path,
+                    dry_run=dry_run,
+                    skip_errors=skip_errors
+                )
+            finally:
+                sys.stdout = original_stdout
+            
+            output = output_buffer.getvalue()
+            
+            # Парсим вывод для получения статистики
+            success_count = 0
+            created_count = 0
+            updated_count = 0
+            failed_count = 0
+            errors = []
+            
+            # Пытаемся извлечь статистику из вывода
+            import re
+            success_match = re.search(r'Успешно обработано: (\d+)', output)
+            if success_match:
+                success_count = int(success_match.group(1))
+            
+            created_match = re.search(r'Создано: (\d+)', output)
+            if created_match:
+                created_count = int(created_match.group(1))
+            
+            updated_match = re.search(r'Обновлено: (\d+)', output)
+            if updated_match:
+                updated_count = int(updated_match.group(1))
+            
+            failed_match = re.search(r'Ошибок: (\d+)', output)
+            if failed_match:
+                failed_count = int(failed_match.group(1))
+            
+            return Response({
+                'success': True,
+                'message': 'Импорт завершен',
+                'statistics': {
+                    'success_count': success_count,
+                    'created_count': created_count,
+                    'updated_count': updated_count,
+                    'failed_count': failed_count,
+                },
+                'output': output if failed_count > 0 else None,  # Показываем вывод только при ошибках
+            })
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            return Response(
+                {
+                    'success': False,
+                    'error': str(e),
+                    'traceback': error_trace if request.user.is_superuser else None
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            # Удаляем временный файл
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
 
 
 class DriverViewSet(viewsets.ModelViewSet):
@@ -438,6 +695,260 @@ class DriverViewSet(viewsets.ModelViewSet):
         
         # Удаление Driver автоматически удалит User (CASCADE)
         instance.delete()
+
+    @action(detail=False, methods=['get'], url_path='template')
+    def download_template(self, request):
+        """Скачивание шаблона Excel для импорта водителей"""
+        try:
+            # Проверяем права доступа (только админы могут скачивать шаблон)
+            if not request.user.is_staff:
+                raise PermissionDenied('Только администраторы могут скачивать шаблон')
+            
+            # Генерируем шаблон в памяти
+            workbook = openpyxl.Workbook()
+            sheet = workbook.active
+            sheet.title = 'Водители'
+            
+            # Определяем заголовки колонок
+            headers = [
+                'Имя',
+                'Телефон',
+                'Email',
+                'Пароль',
+                'Регион',
+                'Машина',
+                'Гос. номер',
+                'Вместимость',
+                'Водитель онлайн',
+                'Рейтинг'
+            ]
+            
+            # Записываем заголовки
+            for col_idx, header in enumerate(headers, start=1):
+                cell = sheet.cell(row=1, column=col_idx)
+                cell.value = header
+                cell.font = Font(bold=True, size=12, color='FFFFFF')
+                cell.fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            # Добавляем пример данных
+            first_region = Region.objects.first()
+            region_title = first_region.title if first_region else 'Алматы'
+            
+            example_row = [
+                'Иванов Иван Иванович',
+                '+7 777 123 4567',
+                'driver1@invotaxi.kz',
+                'password123',
+                region_title,
+                'Toyota Camry',
+                'A 123 BC 02',
+                '4',
+                'Нет',
+                '5.0'
+            ]
+            
+            for col_idx, value in enumerate(example_row, start=1):
+                sheet.cell(row=2, column=col_idx).value = value
+            
+            # Второй пример
+            example_row2 = [
+                'Петров Петр Петрович',
+                '+7 777 765 4321',
+                'driver2@invotaxi.kz',
+                'securepass123',
+                region_title,
+                'Hyundai Sonata',
+                'B 456 DE 05',
+                '4',
+                'Да',
+                '4.5'
+            ]
+            
+            for col_idx, value in enumerate(example_row2, start=1):
+                sheet.cell(row=3, column=col_idx).value = value
+            
+            # Настраиваем ширину колонок
+            column_widths = {
+                'A': 25, 'B': 18, 'C': 25, 'D': 20, 'E': 20,
+                'F': 18, 'G': 15, 'H': 12, 'I': 18, 'J': 10
+            }
+            for col_letter, width in column_widths.items():
+                sheet.column_dimensions[col_letter].width = width
+            
+            # Добавляем инструкцию на второй лист
+            sheet2 = workbook.create_sheet(title='Инструкция')
+            instructions = [
+                ['ПОЛЕ', 'ОБЯЗАТЕЛЬНО', 'ОПИСАНИЕ', 'ПРИМЕР'],
+                ['Имя', 'Да', 'Полное имя водителя', 'Иванов Иван Иванович'],
+                ['Телефон', 'Да', 'Телефон в формате +7...', '+7 777 123 4567'],
+                ['Email', 'Нет', 'Email адрес (опционально)', 'driver@invotaxi.kz'],
+                ['Пароль', 'Да', 'Минимум 8 символов', 'password123'],
+                ['Регион', 'Да', 'Название региона или ID региона', 'Алматы'],
+                ['Машина', 'Да', 'Модель автомобиля', 'Toyota Camry'],
+                ['Гос. номер', 'Да', 'Государственный номер', 'A 123 BC 02'],
+                ['Вместимость', 'Да', 'Количество мест (1-20)', '4'],
+                ['Водитель онлайн', 'Нет', 'Да/Нет или True/False', 'Нет'],
+                ['Рейтинг', 'Нет', 'Рейтинг от 0 до 5', '5.0'],
+                ['', '', '', ''],
+                ['ПРИМЕЧАНИЯ:', '', '', ''],
+                ['1. Все обязательные поля должны быть заполнены', '', '', ''],
+                ['2. Телефон должен быть уникальным', '', '', ''],
+                ['3. Пароль должен содержать минимум 8 символов', '', '', ''],
+                ['4. Для региона можно использовать название или ID', '', '', ''],
+                ['5. Вместимость должна быть от 1 до 20 мест', '', '', ''],
+                ['6. Для "Водитель онлайн" используйте: Да/Нет, True/False, 1/0', '', '', ''],
+            ]
+            
+            for row_idx, row_data in enumerate(instructions, start=1):
+                for col_idx, value in enumerate(row_data, start=1):
+                    cell = sheet2.cell(row=row_idx, column=col_idx)
+                    cell.value = value
+                    if row_idx == 1:
+                        cell.font = Font(bold=True, size=12, color='FFFFFF')
+                        cell.fill = PatternFill(start_color='366092', end_color='366092', fill_type='solid')
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+                    elif row_idx == 12 and col_idx == 1:
+                        cell.font = Font(bold=True, size=11)
+            
+            sheet2.column_dimensions['A'].width = 20
+            sheet2.column_dimensions['B'].width = 12
+            sheet2.column_dimensions['C'].width = 50
+            sheet2.column_dimensions['D'].width = 25
+            
+            # Сохраняем в BytesIO
+            buffer = BytesIO()
+            workbook.save(buffer)
+            buffer.seek(0)
+            
+            # Возвращаем файл как HTTP response
+            response = HttpResponse(
+                buffer.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = 'attachment; filename="шаблон_импорт_водителей.xlsx"'
+            return response
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f'Ошибка генерации шаблона: {e}', exc_info=True)
+            return Response(
+                {'error': f'Ошибка генерации шаблона: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='import')
+    def import_drivers(self, request):
+        """Импорт водителей из Excel файла"""
+        # Проверяем права доступа (только админы могут импортировать)
+        if not request.user.is_staff:
+            raise PermissionDenied('Только администраторы могут импортировать водителей')
+        
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'Файл не предоставлен'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        excel_file = request.FILES['file']
+        if not excel_file.name.endswith(('.xlsx', '.xls')):
+            return Response(
+                {'error': 'Файл должен быть Excel файлом (.xlsx или .xls)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Получаем опции из запроса
+        skip_errors = request.data.get('skip_errors', 'false').lower() == 'true'
+        dry_run = request.data.get('dry_run', 'false').lower() == 'true'
+        
+        # Используем команду импорта для обработки файла
+        from accounts.management.commands.import_drivers_from_excel import Command as ImportCommand
+        from io import BytesIO
+        import tempfile
+        import os
+        
+        # Сохраняем файл во временный файл
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+            for chunk in excel_file.chunks():
+                tmp_file.write(chunk)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Создаем экземпляр команды
+            command = ImportCommand()
+            
+            # Перенаправляем вывод команды
+            from io import StringIO
+            import sys
+            
+            output_buffer = StringIO()
+            original_stdout = sys.stdout
+            sys.stdout = output_buffer
+            
+            try:
+                # Вызываем обработку файла
+                command.handle(
+                    file_path=tmp_file_path,
+                    dry_run=dry_run,
+                    skip_errors=skip_errors
+                )
+            finally:
+                sys.stdout = original_stdout
+            
+            output = output_buffer.getvalue()
+            
+            # Парсим вывод для получения статистики
+            success_count = 0
+            created_count = 0
+            updated_count = 0
+            failed_count = 0
+            errors = []
+            
+            # Пытаемся извлечь статистику из вывода
+            import re
+            success_match = re.search(r'Успешно обработано: (\d+)', output)
+            if success_match:
+                success_count = int(success_match.group(1))
+            
+            created_match = re.search(r'Создано: (\d+)', output)
+            if created_match:
+                created_count = int(created_match.group(1))
+            
+            updated_match = re.search(r'Обновлено: (\d+)', output)
+            if updated_match:
+                updated_count = int(updated_match.group(1))
+            
+            failed_match = re.search(r'Ошибок: (\d+)', output)
+            if failed_match:
+                failed_count = int(failed_match.group(1))
+            
+            return Response({
+                'success': True,
+                'message': 'Импорт завершен',
+                'statistics': {
+                    'success_count': success_count,
+                    'created_count': created_count,
+                    'updated_count': updated_count,
+                    'failed_count': failed_count,
+                },
+                'output': output if failed_count > 0 else None,  # Показываем вывод только при ошибках
+            })
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            return Response(
+                {
+                    'success': False,
+                    'error': str(e),
+                    'traceback': error_trace if request.user.is_superuser else None
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        finally:
+            # Удаляем временный файл
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
 
 
 def get_client_ip(request):

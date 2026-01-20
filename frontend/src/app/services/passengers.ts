@@ -50,5 +50,32 @@ export const passengersApi = {
     const response = await api.get<Passenger>(`/passengers/${passengerId}/`);
     return response.data;
   },
+
+  /**
+   * Скачать шаблон CSV для импорта пассажиров
+   */
+  async downloadTemplate(): Promise<Blob> {
+    const response = await api.get('/passengers/template/', {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  /**
+   * Импорт пассажиров из CSV файла
+   */
+  async importPassengers(file: File, options?: { skipErrors?: boolean; dryRun?: boolean }): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.skipErrors) {
+      formData.append('skip_errors', 'true');
+    }
+    if (options?.dryRun) {
+      formData.append('dry_run', 'true');
+    }
+
+    const response = await api.post('/passengers/import/', formData);
+    return response.data;
+  },
 };
 

@@ -50,6 +50,9 @@ class DispatchEngine:
         if not candidates:
             # Получаем статистику для более информативного сообщения
             from accounts.models import Driver, DriverStatus
+            pickup_region = order.pickup_region or (order.passenger.region if hasattr(order, 'passenger') and order.passenger else None)
+            region_title = pickup_region.title if pickup_region else 'не определен'
+            
             total_drivers = Driver.objects.count()
             online_drivers_count = Driver.objects.filter(is_online=True).count()
             available_drivers_count = Driver.objects.filter(
@@ -58,13 +61,24 @@ class DispatchEngine:
                 status__in=[DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED, DriverStatus.PAUSED]
             ).count() if hasattr(DriverStatus, 'ON_TRIP') else online_drivers_count
             
-            logger.warning(f'Не найдено кандидатов для заказа {order.id}. '
-                         f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}, требуется мест: {order.seats_needed}')
+            # Считаем водителей в нужном районе
+            drivers_in_region_count = 0
+            if pickup_region:
+                drivers_in_region_count = Driver.objects.filter(
+                    is_online=True,
+                    region=pickup_region
+                ).exclude(
+                    status__in=[DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED, DriverStatus.PAUSED]
+                ).count() if hasattr(DriverStatus, 'ON_TRIP') else Driver.objects.filter(is_online=True, region=pickup_region).count()
+            
+            logger.warning(f'Не найдено кандидатов для заказа {order.id} в районе {region_title}. '
+                         f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}, '
+                         f'в районе {region_title}: {drivers_in_region_count}, требуется мест: {order.seats_needed}')
             
             return AssignmentResult(
                 reason='Нет подходящих водителей',
-                rejection_reason=f'Нет доступных онлайн водителей с достаточной вместимостью ({order.seats_needed} мест). '
-                              f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}'
+                rejection_reason=f'Нет доступных онлайн водителей в районе "{region_title}" с достаточной вместимостью ({order.seats_needed} мест). '
+                              f'Всего водителей: {total_drivers}, онлайн: {online_drivers_count}, доступных: {available_drivers_count}, в районе: {drivers_in_region_count}'
             )
 
         # Получаем регион пассажира
@@ -92,11 +106,22 @@ class DispatchEngine:
     def _find_candidates(self, order: Order) -> List[Driver]:
         """
         Находит кандидатов для заказа
+        Район - это жесткое условие (hard constraint), не фактор приоритета
         """
         seats_needed = order.seats_needed
 
+        # Получаем район заказа по координатам pickup
+        pickup_region = order.pickup_region
+        if not pickup_region:
+            # Fallback на район пассажира
+            if hasattr(order, 'passenger') and order.passenger and hasattr(order.passenger, 'region'):
+                pickup_region = order.passenger.region
+                logger.warning(f'Не удалось определить район по координатам для заказа {order.id}, используется район пассажира: {pickup_region}')
+            else:
+                logger.error(f'Не удалось определить район для заказа {order.id}: нет pickup_region и нет passenger.region')
+                return []
+
         # Получаем всех онлайн водителей с правильным статусом
-        # Используем старые проверки для совместимости, но также проверяем новые статусы если они есть
         from accounts.models import DriverStatus
         
         # Фильтруем водителей: онлайн и доступные (не в поездке, не едут к подаче, не получили оффер)
@@ -104,7 +129,7 @@ class DispatchEngine:
         
         # Логируем общее количество онлайн водителей
         total_online = online_drivers.count()
-        logger.debug(f'Найдено онлайн водителей: {total_online} для заказа {order.id}, требуется мест: {seats_needed}')
+        logger.debug(f'Найдено онлайн водителей: {total_online} для заказа {order.id}, требуется мест: {seats_needed}, район: {pickup_region.title}')
         
         # Исключаем занятых водителей
         excluded_statuses = [DriverStatus.ON_TRIP, DriverStatus.ENROUTE_TO_PICKUP, DriverStatus.OFFERED]
@@ -121,8 +146,22 @@ class DispatchEngine:
         candidates = []
         capacity_filtered = 0
         status_filtered = 0
+        region_filtered = 0
+        no_region_filtered = 0
         
         for driver in online_drivers:
+            # Проверка: водитель должен иметь заполненный region
+            if not driver.region:
+                no_region_filtered += 1
+                logger.warning(f'Водитель {driver.id} ({driver.name}) пропущен: не заполнен region (is_online=True, но нет района)')
+                continue
+            
+            # ЖЕСТКИЙ ФИЛЬТР: район должен совпадать
+            if driver.region.id != pickup_region.id:
+                region_filtered += 1
+                logger.debug(f'Водитель {driver.id} ({driver.name}) пропущен: район не совпадает ({driver.region.title} != {pickup_region.title})')
+                continue
+            
             # Проверяем вместимость
             if driver.capacity < seats_needed:
                 capacity_filtered += 1
@@ -146,10 +185,11 @@ class DispatchEngine:
                     continue
 
             candidates.append(driver)
-            logger.debug(f'Водитель {driver.id} ({driver.name}) добавлен в кандидаты. Вместимость: {driver.capacity}, статус: {getattr(driver, "status", "N/A")}')
+            logger.debug(f'Водитель {driver.id} ({driver.name}) добавлен в кандидаты. Вместимость: {driver.capacity}, статус: {getattr(driver, "status", "N/A")}, район: {driver.region.title}')
 
         logger.info(f'Для заказа {order.id} найдено кандидатов: {len(candidates)} из {total_online} онлайн водителей. '
-                   f'Отфильтровано по вместимости: {capacity_filtered}, по статусу: {status_filtered}')
+                   f'Район заказа: {pickup_region.title}. '
+                   f'Отфильтровано: по району - {region_filtered}, без района - {no_region_filtered}, по вместимости - {capacity_filtered}, по статусу - {status_filtered}')
 
         return candidates
 
@@ -157,15 +197,15 @@ class DispatchEngine:
         """
         Вычисляет приоритет водителя для заказа
         Возвращает кортеж для сортировки (меньше = выше приоритет)
+        
+        Район уже отфильтрован в _find_candidates как жесткое условие,
+        поэтому здесь учитываем только fairness и расстояние
         """
-        # 1. Приоритет региона - водители из того же региона имеют приоритет
-        region_match = 0 if driver.region.id == passenger.region.id else 1
-
-        # 2. Fairness penalty (кто меньше заказов взял сегодня)
+        # 1. Fairness penalty (кто меньше заказов взял сегодня)
         driver_id_str = str(driver.id)
         order_count = self._driver_order_counts.get(driver_id_str, 0)
 
-        # 3. Расстояние до точки забора
+        # 2. Расстояние до точки забора
         if driver.current_lat is not None and driver.current_lon is not None:
             distance = Geo.calculate_distance(
                 driver.current_lat, driver.current_lon,
@@ -174,8 +214,8 @@ class DispatchEngine:
         else:
             distance = float('inf')
 
-        # Возвращаем кортеж для сортировки
-        return (region_match, order_count, distance)
+        # Возвращаем кортеж для сортировки (без region_match - район уже отфильтрован)
+        return (order_count, distance)
 
     def get_candidates(self, order: Order, include_offline: bool = True) -> List[dict]:
         """
@@ -197,21 +237,20 @@ class DispatchEngine:
             result.append({
                 'driver_id': str(driver.id),
                 'name': driver.name,
-                'region_id': driver.region.id,
+                'region_id': driver.region.id if driver.region else None,
                 'car_model': driver.car_model,
                 'capacity': driver.capacity,
                 'is_online': driver.is_online,
                 'priority': {
-                    'region_match': priority[0] == 0,
-                    'order_count': priority[1],
-                    'distance': priority[2] if priority[2] != float('inf') else None
+                    'order_count': priority[0],
+                    'distance': priority[1] if priority[1] != float('inf') else None
                 }
             })
 
-        # Сортируем по приоритету: сначала онлайн, потом по региону, количеству заказов и расстоянию
+        # Сортируем по приоритету: сначала онлайн, потом по количеству заказов и расстоянию
+        # (район уже отфильтрован как жесткое условие)
         result.sort(key=lambda x: (
             not x['is_online'],  # Онлайн водители в начале
-            not x['priority']['region_match'],
             x['priority']['order_count'],
             x['priority']['distance'] or float('inf')
         ))

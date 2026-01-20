@@ -1,13 +1,14 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { Search, Filter, Plus, Eye, Edit, X, Check, UserCircle, Car as CarIcon, Phone, Loader2, ArrowUpDown, ArrowUp, ArrowDown, MapPin, Sparkles } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Search, Filter, Plus, Eye, Edit, X, Check, UserCircle, Car as CarIcon, Phone, Loader2, ArrowUpDown, ArrowUp, ArrowDown, MapPin, Sparkles, Upload, Download } from "lucide-react";
 import { Modal } from "./Modal";
-import { ordersApi, Order } from "../services/orders";
+import { ordersApi, Order, ImportResult } from "../services/orders";
 import { passengersApi, Passenger } from "../services/passengers";
 import { dispatchApi } from "../services/dispatch";
 import { format } from "date-fns";
 import { RouteMapPicker } from "./RouteMapPicker";
 import { RouteMapView } from "./RouteMapView";
 import { toast } from "sonner";
+import { debounce } from "../utils/debounce";
 
 const statuses = ["Все", "Ожидание", "В пути", "Выполнено", "Отменён"];
 
@@ -68,9 +69,34 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   const [orderNote, setOrderNote] = useState("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
+  
+  // Состояния для геокодирования
+  const [geocodingPickup, setGeocodingPickup] = useState(false);
+  const [geocodingDropoff, setGeocodingDropoff] = useState(false);
+  const [geocodeErrorPickup, setGeocodeErrorPickup] = useState<string | null>(null);
+  const [geocodeErrorDropoff, setGeocodeErrorDropoff] = useState<string | null>(null);
+  
+  // Состояния для ручного ввода координат
+  const [pickupLatInput, setPickupLatInput] = useState<string>("");
+  const [pickupLonInput, setPickupLonInput] = useState<string>("");
+  const [dropoffLatInput, setDropoffLatInput] = useState<string>("");
+  const [dropoffLonInput, setDropoffLonInput] = useState<string>("");
+  
+  // Refs для хранения debounced функций
+  const geocodePickupRef = useRef<ReturnType<typeof debounce>>();
+  const geocodeDropoffRef = useRef<ReturnType<typeof debounce>>();
   const [generateModal, setGenerateModal] = useState(false);
   const [generatingOrders, setGeneratingOrders] = useState(false);
   const [ordersCount, setOrdersCount] = useState(5);
+  
+  // Импорт/экспорт
+  const [importModal, setImportModal] = useState(false);
+  const [exportModal, setExportModal] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importOptions, setImportOptions] = useState({ dryRun: false, skipErrors: false });
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
   // Load orders from API
   useEffect(() => {
@@ -110,6 +136,164 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     setOrderDate(tomorrow.toISOString().split('T')[0]);
     setOrderTime("10:00");
   }, []);
+
+  // Функция геокодирования адреса отправления
+  const geocodePickupAddress = useCallback(async (address: string) => {
+    const trimmedAddress = address?.trim();
+    if (!trimmedAddress) {
+      setGeocodeErrorPickup(null);
+      setGeocodingPickup(false);
+      setPickupCoords(null); // Сбрасываем координаты при пустом адресе
+      return;
+    }
+
+    setGeocodingPickup(true);
+    setGeocodeErrorPickup(null);
+
+    try {
+      const result = await ordersApi.geocodeAddress(trimmedAddress);
+      if (result.status === 'ok' && result.lat && result.lon) {
+        // Всегда обновляем координаты, даже если они похожи
+        const newCoords = { lat: result.lat, lon: result.lon };
+        setPickupCoords(newCoords);
+        // Обновляем поля ввода координат
+        setPickupLatInput(result.lat.toFixed(6));
+        setPickupLonInput(result.lon.toFixed(6));
+        setGeocodeErrorPickup(null);
+        console.log('Координаты обновлены для адреса отправления:', newCoords);
+      } else {
+        setPickupCoords(null); // Сбрасываем координаты если адрес не найден
+        setGeocodeErrorPickup(result.error || 'Адрес не найден');
+      }
+    } catch (err: any) {
+      console.error('Ошибка геокодирования адреса отправления:', err);
+      const errorMessage = err.response?.data?.error || err.message || 'Ошибка геокодирования';
+      setGeocodeErrorPickup(errorMessage);
+      setPickupCoords(null); // Сбрасываем координаты при ошибке
+    } finally {
+      setGeocodingPickup(false);
+    }
+  }, []);
+
+  // Функция геокодирования адреса назначения
+  const geocodeDropoffAddress = useCallback(async (address: string) => {
+    const trimmedAddress = address?.trim();
+    if (!trimmedAddress) {
+      setGeocodeErrorDropoff(null);
+      setGeocodingDropoff(false);
+      setDropoffCoords(null); // Сбрасываем координаты при пустом адресе
+      return;
+    }
+
+    setGeocodingDropoff(true);
+    setGeocodeErrorDropoff(null);
+
+    try {
+      const result = await ordersApi.geocodeAddress(trimmedAddress);
+      if (result.status === 'ok' && result.lat && result.lon) {
+        // Всегда обновляем координаты, даже если они похожи
+        const newCoords = { lat: result.lat, lon: result.lon };
+        setDropoffCoords(newCoords);
+        // Обновляем поля ввода координат
+        setDropoffLatInput(result.lat.toFixed(6));
+        setDropoffLonInput(result.lon.toFixed(6));
+        setGeocodeErrorDropoff(null);
+        console.log('Координаты обновлены для адреса назначения:', newCoords);
+      } else {
+        setDropoffCoords(null); // Сбрасываем координаты если адрес не найден
+        setGeocodeErrorDropoff(result.error || 'Адрес не найден');
+      }
+    } catch (err: any) {
+      console.error('Ошибка геокодирования адреса назначения:', err);
+      const errorMessage = err.response?.data?.error || err.message || 'Ошибка геокодирования';
+      setGeocodeErrorDropoff(errorMessage);
+      setDropoffCoords(null); // Сбрасываем координаты при ошибке
+    } finally {
+      setGeocodingDropoff(false);
+    }
+  }, []);
+
+  // Создаем debounced функции при монтировании компонента
+  useEffect(() => {
+    geocodePickupRef.current = debounce(geocodePickupAddress, 800);
+    geocodeDropoffRef.current = debounce(geocodeDropoffAddress, 800);
+
+    return () => {
+      // Cleanup не требуется, так как debounce сам управляет таймерами
+    };
+  }, [geocodePickupAddress, geocodeDropoffAddress]);
+
+  // Обработчики изменения адресов с debounce
+  const handlePickupAddressChange = useCallback((value: string) => {
+    setPickupAddress(value);
+    // Очищаем ошибку при изменении адреса
+    setGeocodeErrorPickup(null);
+    // Сбрасываем координаты при изменении адреса, чтобы маркер обновился
+    setPickupCoords(null);
+    
+    // Вызываем геокодирование только если адрес не пустой
+    if (geocodePickupRef.current && value.trim()) {
+      geocodePickupRef.current(value);
+    } else if (!value.trim()) {
+      // Если адрес пустой, сбрасываем координаты и ошибки
+      setPickupCoords(null);
+      setGeocodeErrorPickup(null);
+    }
+  }, []);
+
+  const handleDropoffAddressChange = useCallback((value: string) => {
+    setDropoffAddress(value);
+    // Очищаем ошибку при изменении адреса
+    setGeocodeErrorDropoff(null);
+    // Сбрасываем координаты при изменении адреса, чтобы маркер обновился
+    setDropoffCoords(null);
+    
+    // Вызываем геокодирование только если адрес не пустой
+    if (geocodeDropoffRef.current && value.trim()) {
+      geocodeDropoffRef.current(value);
+    } else if (!value.trim()) {
+      // Если адрес пустой, сбрасываем координаты и ошибки
+      setDropoffCoords(null);
+      setGeocodeErrorDropoff(null);
+    }
+  }, []);
+
+  // Синхронизация полей ввода координат с состоянием координат
+  useEffect(() => {
+    if (pickupCoords) {
+      const latStr = pickupCoords.lat.toFixed(6);
+      const lonStr = pickupCoords.lon.toFixed(6);
+      // Обновляем только если значения отличаются, чтобы не сбрасывать ввод пользователя
+      if (pickupLatInput !== latStr) {
+        setPickupLatInput(latStr);
+      }
+      if (pickupLonInput !== lonStr) {
+        setPickupLonInput(lonStr);
+      }
+    } else if (!pickupAddress.trim()) {
+      // Сбрасываем только если адрес тоже пустой
+      setPickupLatInput("");
+      setPickupLonInput("");
+    }
+  }, [pickupCoords?.lat, pickupCoords?.lon]);
+
+  useEffect(() => {
+    if (dropoffCoords) {
+      const latStr = dropoffCoords.lat.toFixed(6);
+      const lonStr = dropoffCoords.lon.toFixed(6);
+      // Обновляем только если значения отличаются, чтобы не сбрасывать ввод пользователя
+      if (dropoffLatInput !== latStr) {
+        setDropoffLatInput(latStr);
+      }
+      if (dropoffLonInput !== lonStr) {
+        setDropoffLonInput(lonStr);
+      }
+    } else if (!dropoffAddress.trim()) {
+      // Сбрасываем только если адрес тоже пустой
+      setDropoffLatInput("");
+      setDropoffLonInput("");
+    }
+  }, [dropoffCoords?.lat, dropoffCoords?.lon]);
 
   // Обработчик создания заказа
   const handleCreateOrder = async () => {
@@ -170,10 +354,16 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       
       // Закрываем модальное окно и сбрасываем форму
       setCreateModal(false);
+      setGeocodeErrorPickup(null);
+      setGeocodeErrorDropoff(null);
       setPickupAddress("");
       setDropoffAddress("");
       setPickupCoords(null);
       setDropoffCoords(null);
+      setPickupLatInput("");
+      setPickupLonInput("");
+      setDropoffLatInput("");
+      setDropoffLonInput("");
       setSelectedPassengerId("");
       setOrderNote("");
       const now = new Date();
@@ -720,13 +910,27 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           <h1 className="text-3xl dark:text-white">Управление заказами</h1>
           <p className="text-gray-600 dark:text-gray-400">Просмотр и управление всеми заказами</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <button 
             onClick={() => setGenerateModal(true)}
             className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
           >
             <Sparkles className="w-5 h-5" />
             Генерировать заказы
+          </button>
+          <button 
+            onClick={() => setImportModal(true)}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+          >
+            <Upload className="w-5 h-5" />
+            Импорт заказов
+          </button>
+          <button 
+            onClick={() => setExportModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+          >
+            <Download className="w-5 h-5" />
+            Экспорт по водителям
           </button>
           <button 
             onClick={() => setCreateModal(true)}
@@ -1636,11 +1840,17 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
         isOpen={createModal}
         onClose={() => {
           setCreateModal(false);
+          setGeocodeErrorPickup(null);
+          setGeocodeErrorDropoff(null);
           // Сброс состояния при закрытии
           setPickupAddress("");
           setDropoffAddress("");
           setPickupCoords(null);
           setDropoffCoords(null);
+          setPickupLatInput("");
+          setPickupLonInput("");
+          setDropoffLatInput("");
+          setDropoffLonInput("");
           setSelectedPassengerId("");
           setOrderNote("");
           const now = new Date();
@@ -1656,12 +1866,16 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <button
               onClick={() => {
                 setCreateModal(false);
+      setGeocodeErrorPickup(null);
+      setGeocodeErrorDropoff(null);
                 setPickupAddress("");
                 setDropoffAddress("");
                 setPickupCoords(null);
                 setDropoffCoords(null);
                 setSelectedPassengerId("");
                 setOrderNote("");
+                setGeocodeErrorPickup(null);
+                setGeocodeErrorDropoff(null);
                 const now = new Date();
                 const tomorrow = new Date(now);
                 tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1719,9 +1933,15 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               height="400px"
               onPickupChange={(lat, lon) => {
                 setPickupCoords({ lat, lon });
+                setPickupLatInput(lat.toFixed(6));
+                setPickupLonInput(lon.toFixed(6));
+                setGeocodeErrorPickup(null);
               }}
               onDropoffChange={(lat, lon) => {
                 setDropoffCoords({ lat, lon });
+                setDropoffLatInput(lat.toFixed(6));
+                setDropoffLonInput(lon.toFixed(6));
+                setGeocodeErrorDropoff(null);
               }}
               initialPickup={pickupCoords ? { lat: pickupCoords.lat, lon: pickupCoords.lon } : undefined}
               initialDropoff={dropoffCoords ? { lat: dropoffCoords.lat, lon: dropoffCoords.lon } : undefined}
@@ -1734,26 +1954,148 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
                 Откуда (адрес)
               </label>
-              <input
-                type="text"
-                value={pickupAddress}
-                onChange={(e) => setPickupAddress(e.target.value)}
-                placeholder="Введите адрес начала маршрута или выберите на карте"
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={pickupAddress}
+                  onChange={(e) => handlePickupAddressChange(e.target.value)}
+                  placeholder="Введите адрес начала маршрута или выберите на карте"
+                  className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
+                    geocodeErrorPickup
+                      ? "border-red-300 dark:border-red-600"
+                      : "border-gray-300 dark:border-gray-600"
+                  }`}
+                />
+                {geocodingPickup && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  </div>
+                )}
+              </div>
+              {geocodeErrorPickup && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                  {geocodeErrorPickup}
+                </p>
+              )}
+              {/* Поля для ручного ввода координат */}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Широта
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={pickupLatInput}
+                    onChange={(e) => setPickupLatInput(e.target.value)}
+                    onBlur={() => {
+                      const lat = parseFloat(pickupLatInput);
+                      if (!isNaN(lat) && lat >= -90 && lat <= 90) {
+                        const lon = pickupCoords?.lon || parseFloat(pickupLonInput) || 51.8833;
+                        setPickupCoords({ lat, lon });
+                        setGeocodeErrorPickup(null);
+                      }
+                    }}
+                    placeholder="47.1167"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Долгота
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={pickupLonInput}
+                    onChange={(e) => setPickupLonInput(e.target.value)}
+                    onBlur={() => {
+                      const lon = parseFloat(pickupLonInput);
+                      if (!isNaN(lon) && lon >= -180 && lon <= 180) {
+                        const lat = pickupCoords?.lat || parseFloat(pickupLatInput) || 47.1167;
+                        setPickupCoords({ lat, lon });
+                        setGeocodeErrorPickup(null);
+                      }
+                    }}
+                    placeholder="51.8833"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
             </div>
 
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
                 Куда (адрес)
               </label>
-              <input
-                type="text"
-                value={dropoffAddress}
-                onChange={(e) => setDropoffAddress(e.target.value)}
-                placeholder="Введите адрес назначения или выберите на карте"
-                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
-              />
+              <div className="relative">
+                <input
+                  type="text"
+                  value={dropoffAddress}
+                  onChange={(e) => handleDropoffAddressChange(e.target.value)}
+                  placeholder="Введите адрес назначения или выберите на карте"
+                  className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
+                    geocodeErrorDropoff
+                      ? "border-red-300 dark:border-red-600"
+                      : "border-gray-300 dark:border-gray-600"
+                  }`}
+                />
+                {geocodingDropoff && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  </div>
+                )}
+              </div>
+              {geocodeErrorDropoff && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                  {geocodeErrorDropoff}
+                </p>
+              )}
+              {/* Поля для ручного ввода координат */}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Широта
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={dropoffLatInput}
+                    onChange={(e) => setDropoffLatInput(e.target.value)}
+                    onBlur={() => {
+                      const lat = parseFloat(dropoffLatInput);
+                      if (!isNaN(lat) && lat >= -90 && lat <= 90) {
+                        const lon = dropoffCoords?.lon || parseFloat(dropoffLonInput) || 51.8833;
+                        setDropoffCoords({ lat, lon });
+                        setGeocodeErrorDropoff(null);
+                      }
+                    }}
+                    placeholder="47.1167"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Долгота
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={dropoffLonInput}
+                    onChange={(e) => setDropoffLonInput(e.target.value)}
+                    onBlur={() => {
+                      const lon = parseFloat(dropoffLonInput);
+                      if (!isNaN(lon) && lon >= -180 && lon <= 180) {
+                        const lat = dropoffCoords?.lat || parseFloat(dropoffLatInput) || 47.1167;
+                        setDropoffCoords({ lat, lon });
+                        setGeocodeErrorDropoff(null);
+                      }
+                    }}
+                    placeholder="51.8833"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1896,6 +2238,230 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 </ul>
               </div>
             </>
+          )}
+        </div>
+      </Modal>
+
+      {/* Import Orders Modal */}
+      <Modal
+        isOpen={importModal}
+        onClose={() => {
+          setImportModal(false);
+          setImportFile(null);
+          setImportOptions({ dryRun: false, skipErrors: false });
+          setImportResult(null);
+        }}
+        title="Импорт заказов из CSV"
+        size="lg"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setImportModal(false);
+                setImportFile(null);
+                setImportOptions({ dryRun: false, skipErrors: false });
+                setImportResult(null);
+              }}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={async () => {
+                if (!importFile) {
+                  toast.error("Выберите CSV файл");
+                  return;
+                }
+                
+                try {
+                  setImporting(true);
+                  const result = await ordersApi.importOrders(importFile, importOptions);
+                  setImportResult(result);
+                  
+                  if (result.success_count > 0) {
+                    toast.success(`Успешно импортировано: ${result.success_count} заказов`);
+                    if (!importOptions.dryRun) {
+                      await refreshOrders();
+                    }
+                  }
+                  if (result.failed_count > 0) {
+                    toast.warning(`Ошибок: ${result.failed_count}`);
+                  }
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || err.message || "Ошибка импорта");
+                } finally {
+                  setImporting(false);
+                }
+              }}
+              disabled={importing || !importFile}
+              className="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importing ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Импорт...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5" />
+                  Импортировать
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">CSV файл *</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  if (file.size > 10 * 1024 * 1024) {
+                    toast.error("Файл слишком большой (максимум 10MB)");
+                    return;
+                  }
+                  setImportFile(file);
+                  setImportResult(null);
+                }
+              }}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+            />
+            {importFile && (
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Выбран файл: {importFile.name} ({(importFile.size / 1024).toFixed(2)} KB)
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={importOptions.dryRun}
+                onChange={(e) => setImportOptions({ ...importOptions, dryRun: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              Только валидация (не создавать заказы)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={importOptions.skipErrors}
+                onChange={(e) => setImportOptions({ ...importOptions, skipErrors: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              Пропускать строки с ошибками
+            </label>
+          </div>
+
+          <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+            <p className="font-medium dark:text-gray-300">Формат CSV:</p>
+            <p>Обязательные поля: passenger_id или passenger_phone, pickup_title, pickup_lat, pickup_lon, dropoff_title, dropoff_lat, dropoff_lon, desired_pickup_time</p>
+            <p>Опциональные: has_companion, note, status</p>
+          </div>
+
+          {importResult && (
+            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <h3 className="font-semibold mb-2 text-gray-900 dark:text-white">Результаты импорта:</h3>
+              <div className="space-y-1 text-sm">
+                <p className="text-green-600 dark:text-green-400">
+                  Успешно: {importResult.success_count}
+                </p>
+                <p className="text-red-600 dark:text-red-400">
+                  Ошибок: {importResult.failed_count}
+                </p>
+                {importResult.errors.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-medium text-gray-700 dark:text-gray-300">Детали ошибок:</p>
+                    <div className="max-h-40 overflow-y-auto mt-1">
+                      {importResult.errors.slice(0, 10).map((error, idx) => (
+                        <p key={idx} className="text-xs text-red-600 dark:text-red-400">
+                          Строка {error.row}: {error.message}
+                        </p>
+                      ))}
+                      {importResult.errors.length > 10 && (
+                        <p className="text-xs text-gray-500">... и еще {importResult.errors.length - 10} ошибок</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Export Orders Modal */}
+      <Modal
+        isOpen={exportModal}
+        onClose={() => setExportModal(false)}
+        title="Экспорт заказов по водителям"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => setExportModal(false)}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={async () => {
+                try {
+                  setExporting(true);
+                  // Экспортируем все заказы с назначенными водителями (без фильтра по статусу для экспорта)
+                  const blob = await ordersApi.exportOrdersByDrivers();
+                  
+                  // Создаем ссылку и скачиваем файл
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `orders_export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.zip`;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  window.URL.revokeObjectURL(url);
+                  
+                  toast.success("Экспорт завершен, файл скачан");
+                  setExportModal(false);
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || err.message || "Ошибка экспорта");
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              disabled={exporting}
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Экспорт...
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5" />
+                  Экспортировать
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            <p>Будут экспортированы все заказы с назначенными водителями.</p>
+            <p className="mt-2">Для каждого водителя будет создан отдельный CSV файл.</p>
+            <p className="mt-2">Все файлы будут упакованы в ZIP архив.</p>
+          </div>
+          {selectedStatus !== "Все" && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-blue-700 dark:text-blue-300">
+              Будет применен фильтр по статусу: {statusMap[selectedStatus.toLowerCase()] || selectedStatus}
+            </div>
           )}
         </div>
       </Modal>

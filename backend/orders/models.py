@@ -415,6 +415,27 @@ class Order(models.Model):
         """Координаты назначения"""
         return (self.dropoff_lat, self.dropoff_lon)
 
+    @property
+    def pickup_region(self):
+        """
+        Определяет регион по координатам точки pickup
+        Использует regions.services.get_region_by_coordinates
+        Fallback на order.passenger.region если регион не найден
+        """
+        from regions.services import get_region_by_coordinates
+        
+        # Пытаемся определить регион по координатам pickup
+        region = get_region_by_coordinates(self.pickup_lat, self.pickup_lon)
+        
+        if region:
+            return region
+        
+        # Fallback на район пассажира
+        if hasattr(self, 'passenger') and self.passenger and hasattr(self.passenger, 'region'):
+            return self.passenger.region
+        
+        return None
+
 
 class OrderEvent(models.Model):
     """История изменений заказа"""

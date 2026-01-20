@@ -96,6 +96,34 @@ export interface PaginatedResponse<T> {
   results: T[];
 }
 
+export interface ImportResult {
+  success: number;
+  failed: number;
+  errors: ImportError[];
+  imported_ids: string[];
+  dry_run?: boolean;
+}
+
+export interface ImportError {
+  row: number;
+  message: string;
+}
+
+export interface ExportParams {
+  status?: string;
+  driver_id?: number;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface GeocodeResult {
+  status: 'ok' | 'not_found' | 'error';
+  lat?: number;
+  lon?: number;
+  display_name?: string;
+  error?: string;
+}
+
 export const ordersApi = {
   /**
    * Получить список заказов
@@ -150,6 +178,49 @@ export const ordersApi = {
     const response = await api.post<Order>(`/orders/${orderId}/calculate-price/`, {
       actual_distance_km: actualDistance,
       actual_waiting_time_minutes: actualWaitingTime,
+    });
+    return response.data;
+  },
+
+  /**
+   * Импорт заказов из CSV
+   */
+  async importOrders(
+    file: File,
+    options?: { dryRun?: boolean; skipErrors?: boolean }
+  ): Promise<ImportResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    if (options?.dryRun) {
+      formData.append('dry_run', 'true');
+    }
+    if (options?.skipErrors) {
+      formData.append('skip_errors', 'true');
+    }
+    
+    // Не устанавливаем Content-Type вручную - axios автоматически установит его с правильным boundary для FormData
+    const response = await api.post<ImportResult>('/orders/import/', formData);
+    return response.data;
+  },
+
+  /**
+   * Экспорт заказов по водителям
+   */
+  async exportOrdersByDrivers(params?: ExportParams): Promise<Blob> {
+    const response = await api.get('/orders/export-by-drivers/', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  /**
+   * Геокодировать адрес через Nominatim API
+   */
+  async geocodeAddress(address: string): Promise<GeocodeResult> {
+    const response = await api.post<GeocodeResult>('/orders/geocode/', {
+      address,
     });
     return response.data;
   },

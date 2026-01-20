@@ -5,6 +5,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 // Создаем axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
+  // Не устанавливаем Content-Type глобально, чтобы axios мог автоматически
+  // установить правильный тип для FormData (multipart/form-data с boundary)
   headers: {
     'Content-Type': 'application/json',
   },
@@ -26,6 +28,13 @@ api.interceptors.request.use(
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Если отправляем FormData, не устанавливаем Content-Type вручную
+    // axios автоматически установит правильный Content-Type с boundary
+    if (config.data instanceof FormData && config.headers) {
+      delete config.headers['Content-Type'];
+    }
+    
     return config;
   },
   (error: AxiosError) => {

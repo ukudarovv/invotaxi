@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Search, Plus, Eye, Edit, MapPin, Phone, Mail, X, Check, Car as CarIcon, Loader2, Trash2, Package } from "lucide-react";
+import { Search, Plus, Eye, Edit, MapPin, Phone, Mail, X, Check, Car as CarIcon, Loader2, Trash2, Package, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "./Modal";
 import { MapView } from "./MapView";
@@ -50,6 +50,12 @@ export function Drivers() {
   const [newCapacity, setNewCapacity] = useState(4);
   const [newIsOnline, setNewIsOnline] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+  const [importModal, setImportModal] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importSkipErrors, setImportSkipErrors] = useState(true);
+  const [importDryRun, setImportDryRun] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -255,10 +261,70 @@ export function Drivers() {
       setNewLicenseNumber("");
       setNewCapacity(4);
       setNewIsOnline(false);
+      toast.success("Водитель успешно создан");
     } catch (err: any) {
       setError(err.response?.data?.error || err.message || "Ошибка создания водителя");
+      toast.error(err.response?.data?.error || err.message || "Ошибка создания водителя");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDownloadTemplate = async () => {
+    try {
+      setDownloadingTemplate(true);
+      const blob = await driversApi.downloadTemplate();
+      
+      // Создаем ссылку и скачиваем файл
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `шаблон_импорт_водителей_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      toast.success("Шаблон успешно скачан");
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || err.message || "Ошибка скачивания шаблона");
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  };
+
+  const handleImportDrivers = async () => {
+    if (!importFile) {
+      toast.error("Выберите файл для импорта");
+      return;
+    }
+
+    try {
+      setImporting(true);
+      const result = await driversApi.importDrivers(importFile, {
+        skipErrors: importSkipErrors,
+        dryRun: importDryRun,
+      });
+
+      if (result.success) {
+        const stats = result.statistics;
+        toast.success(
+          `Импорт завершен: создано ${stats.created_count}, обновлено ${stats.updated_count}, ошибок: ${stats.failed_count}`
+        );
+        
+        if (!importDryRun) {
+          await refreshDrivers();
+        }
+        
+        setImportModal(false);
+        setImportFile(null);
+      } else {
+        toast.error(result.error || "Ошибка импорта");
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || err.message || "Ошибка импорта");
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -269,13 +335,36 @@ export function Drivers() {
           <h1 className="text-3xl dark:text-white">Управление водителями</h1>
           <p className="text-gray-600 dark:text-gray-400">Просмотр и управление водителями</p>
         </div>
-        <button
-          onClick={() => setAddModal(true)}
-          className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
-        >
-          <Plus className="w-5 h-5" />
-          Добавить водителя
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleDownloadTemplate}
+            disabled={downloadingTemplate}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Скачать шаблон Excel для импорта водителей"
+          >
+            {downloadingTemplate ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Download className="w-5 h-5" />
+            )}
+            {downloadingTemplate ? "Скачивание..." : "Скачать шаблон"}
+          </button>
+          <button
+            onClick={() => setImportModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+            title="Импортировать водителей из Excel файла"
+          >
+            <Upload className="w-5 h-5" />
+            Импорт
+          </button>
+          <button
+            onClick={() => setAddModal(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
+          >
+            <Plus className="w-5 h-5" />
+            Добавить водителя
+          </button>
+        </div>
       </div>
 
       {/* Error Message */}
@@ -1221,6 +1310,117 @@ export function Drivers() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* Import Modal */}
+      <Modal
+        isOpen={importModal}
+        onClose={() => {
+          setImportModal(false);
+          setImportFile(null);
+          setImportSkipErrors(true);
+          setImportDryRun(false);
+        }}
+        title="Импорт водителей из Excel"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setImportModal(false);
+                setImportFile(null);
+                setImportSkipErrors(true);
+                setImportDryRun(false);
+              }}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleImportDrivers}
+              disabled={!importFile || importing}
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importing ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Импорт...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5" />
+                  Импортировать
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium dark:text-gray-300 mb-2">
+              Выберите Excel файл
+            </label>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Поддерживаются форматы: .xlsx, .xls
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={importSkipErrors}
+                onChange={(e) => setImportSkipErrors(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm dark:text-gray-300">
+                Пропускать ошибки и продолжать
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={importDryRun}
+                onChange={(e) => setImportDryRun(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm dark:text-gray-300">
+                Режим валидации (не создавать водителей)
+              </span>
+            </label>
+          </div>
+
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+            <p className="text-sm text-blue-800 dark:text-blue-200">
+              <strong>Инструкция:</strong>
+            </p>
+            <ul className="text-sm text-blue-700 dark:text-blue-300 mt-2 space-y-1 list-disc list-inside">
+              <li>Используйте шаблон, скачанный кнопкой "Скачать шаблон"</li>
+              <li>Обязательные поля: Имя, Телефон, Пароль, Регион, Машина, Гос. номер, Вместимость</li>
+              <li>Пароль должен содержать минимум 8 символов</li>
+              <li>Телефон должен быть уникальным</li>
+            </ul>
+          </div>
+
+          {importFile && (
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
+              <p className="text-sm dark:text-gray-300">
+                Выбран файл: <strong>{importFile.name}</strong>
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Размер: {(importFile.size / 1024).toFixed(2)} KB
+              </p>
+            </div>
+          )}
+        </div>
       </Modal>
     </div>
   );

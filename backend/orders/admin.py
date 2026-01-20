@@ -1,8 +1,14 @@
 from django.contrib import admin
+from django.http import HttpResponse
+from django.contrib import messages
 from .models import (
     Order, OrderEvent, PricingConfig, OrderOffer, DispatchConfig,
     SurgeZone, PriceBreakdown, CancelPolicy
 )
+import csv
+import io
+import zipfile
+from datetime import datetime
 
 
 @admin.register(Order)
@@ -15,6 +21,7 @@ class OrderAdmin(admin.ModelAdmin):
     search_fields = ['id', 'passenger__full_name', 'driver__name', 'pickup_title']
     readonly_fields = ['created_at', 'assigned_at', 'completed_at']
     date_hierarchy = 'created_at'
+    actions = ['export_orders_by_drivers']
     fieldsets = (
         ('Основная информация', {
             'fields': ('id', 'passenger', 'driver', 'status')
@@ -37,6 +44,100 @@ class OrderAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+    
+    def export_orders_by_drivers(self, request, queryset):
+        """
+        Экспорт заказов по водителям в ZIP архив с CSV файлами
+        """
+        # Получаем только назначенные заказы из выбранных
+        orders = queryset.filter(driver__isnull=False).select_related(
+            'passenger', 'driver', 'passenger__user', 'driver__user'
+        )
+        
+        if not orders.exists():
+            self.message_user(request, 'Нет заказов с назначенными водителями для экспорта', level=messages.WARNING)
+            return
+        
+        # Группируем по водителям
+        drivers_orders = {}
+        for order in orders:
+            if order.driver:
+                driver_id = order.driver.id
+                if driver_id not in drivers_orders:
+                    drivers_orders[driver_id] = {
+                        'driver': order.driver,
+                        'orders': []
+                    }
+                drivers_orders[driver_id]['orders'].append(order)
+        
+        # Создаем ZIP архив
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for driver_id, data in drivers_orders.items():
+                driver = data['driver']
+                orders_list = data['orders']
+                
+                # Создаем CSV для водителя
+                csv_buffer = io.StringIO()
+                csv_buffer.write('\ufeff')  # BOM для UTF-8
+                writer = csv.writer(csv_buffer)
+                
+                # Заголовки
+                writer.writerow([
+                    'order_id',
+                    'passenger_name',
+                    'passenger_phone',
+                    'pickup_title',
+                    'pickup_lat',
+                    'pickup_lon',
+                    'dropoff_title',
+                    'dropoff_lat',
+                    'dropoff_lon',
+                    'desired_pickup_time',
+                    'status',
+                    'assigned_at',
+                    'has_companion',
+                    'distance_km',
+                    'estimated_price',
+                    'final_price'
+                ])
+                
+                # Данные
+                for order in orders_list:
+                    writer.writerow([
+                        order.id,
+                        order.passenger.full_name if order.passenger else '',
+                        order.passenger.user.phone if order.passenger and order.passenger.user else '',
+                        order.pickup_title,
+                        order.pickup_lat,
+                        order.pickup_lon,
+                        order.dropoff_title,
+                        order.dropoff_lat,
+                        order.dropoff_lon,
+                        order.desired_pickup_time.isoformat() if order.desired_pickup_time else '',
+                        order.status,
+                        order.assigned_at.isoformat() if order.assigned_at else '',
+                        'Да' if order.has_companion else 'Нет',
+                        order.distance_km or '',
+                        float(order.estimated_price) if order.estimated_price else '',
+                        float(order.final_price) if order.final_price else ''
+                    ])
+                
+                # Добавляем в ZIP
+                filename = f'orders_driver_{driver.id}_{driver.name.replace(" ", "_")}.csv'
+                zip_file.writestr(filename, csv_buffer.getvalue().encode('utf-8'))
+        
+        zip_buffer.seek(0)
+        
+        # Создаем HTTP ответ
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+        response['Content-Disposition'] = f'attachment; filename="orders_export_{timestamp}.zip"'
+        
+        self.message_user(request, f'Экспортировано заказов для {len(drivers_orders)} водителей', level=messages.SUCCESS)
+        return response
+    
+    export_orders_by_drivers.short_description = 'Экспортировать заказы по водителям (ZIP с CSV файлами)'
 
 
 @admin.register(PricingConfig)

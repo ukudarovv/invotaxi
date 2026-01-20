@@ -332,6 +332,57 @@ export function RouteMapPicker({
     updateRoute();
   }, [pickupCoords, dropoffCoords, updateRoute]);
 
+  // Обновление маркеров при изменении initialPickup и initialDropoff извне
+  useEffect(() => {
+    if (initialPickup && mapInstanceRef.current) {
+      const newCoords = { lat: initialPickup.lat, lon: initialPickup.lon };
+      // Проверяем, изменились ли координаты
+      const currentCoords = pickupCoordsRef.current;
+      if (!currentCoords || 
+          Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 || 
+          Math.abs(currentCoords.lon - newCoords.lon) > 0.0001) {
+        setPickupCoords(newCoords);
+        pickupCoordsRef.current = newCoords;
+        updatePickupMarker(initialPickup.lat, initialPickup.lon);
+        updateRoute();
+      }
+    } else if (!initialPickup && pickupCoordsRef.current && mapInstanceRef.current) {
+      // Если initialPickup стал null, удаляем маркер
+      if (pickupMarkerRef.current) {
+        mapInstanceRef.current.removeLayer(pickupMarkerRef.current);
+        pickupMarkerRef.current = null;
+      }
+      setPickupCoords(null);
+      pickupCoordsRef.current = null;
+      updateRoute();
+    }
+  }, [initialPickup?.lat, initialPickup?.lon, updatePickupMarker, updateRoute]);
+
+  useEffect(() => {
+    if (initialDropoff && mapInstanceRef.current) {
+      const newCoords = { lat: initialDropoff.lat, lon: initialDropoff.lon };
+      // Проверяем, изменились ли координаты
+      const currentCoords = dropoffCoordsRef.current;
+      if (!currentCoords || 
+          Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 || 
+          Math.abs(currentCoords.lon - newCoords.lon) > 0.0001) {
+        setDropoffCoords(newCoords);
+        dropoffCoordsRef.current = newCoords;
+        updateDropoffMarker(initialDropoff.lat, initialDropoff.lon);
+        updateRoute();
+      }
+    } else if (!initialDropoff && dropoffCoordsRef.current && mapInstanceRef.current) {
+      // Если initialDropoff стал null, удаляем маркер
+      if (dropoffMarkerRef.current) {
+        mapInstanceRef.current.removeLayer(dropoffMarkerRef.current);
+        dropoffMarkerRef.current = null;
+      }
+      setDropoffCoords(null);
+      dropoffCoordsRef.current = null;
+      updateRoute();
+    }
+  }, [initialDropoff?.lat, initialDropoff?.lon, updateDropoffMarker, updateRoute]);
+
   return (
     <div className="space-y-3">
       {/* Переключатель режима выбора */}

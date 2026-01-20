@@ -92,8 +92,22 @@ class MatchingService:
     def _filter_candidates(self, order: Order) -> List[Driver]:
         """
         Шаг B: Предварительная фильтрация (hard constraints)
+        Район - это жесткое условие, не фактор приоритета
         """
         seats_needed = order.seats_needed
+        
+        # Получаем район заказа по координатам pickup
+        pickup_region = order.pickup_region
+        if not pickup_region:
+            # Fallback на район пассажира
+            if hasattr(order, 'passenger') and order.passenger and hasattr(order.passenger, 'region'):
+                pickup_region = order.passenger.region
+                logger.warning(f'Не удалось определить район по координатам для заказа {order.id}, используется район пассажира: {pickup_region}')
+            else:
+                logger.error(f'Не удалось определить район для заказа {order.id}: нет pickup_region и нет passenger.region')
+                return []
+        
+        logger.debug(f'Фильтрация кандидатов для заказа {order.id}, район: {pickup_region.title}')
         
         # Базовый фильтр: онлайн и свободен
         query = Q(
@@ -102,16 +116,28 @@ class MatchingService:
             capacity__gte=seats_needed
         )
         
-        # Фильтр по региону (опционально, можно ослабить)
-        # Если нужна строгая фильтрация по региону:
-        # if order.passenger.region:
-        #     query &= Q(region=order.passenger.region)
+        # ЖЕСТКИЙ ФИЛЬТР: район должен совпадать
+        query &= Q(region=pickup_region)
+        
+        candidates_before_region = Driver.objects.filter(
+            is_online=True,
+            status__in=[DriverStatus.ONLINE_IDLE, DriverStatus.PAUSED],
+            capacity__gte=seats_needed
+        ).count()
         
         candidates = Driver.objects.filter(query).select_related('statistics', 'region')
+        
+        candidates_after_region = candidates.count()
+        logger.debug(f'Кандидаты до фильтрации по району: {candidates_before_region}, после: {candidates_after_region}')
         
         # Дополнительные проверки
         filtered = []
         for driver in candidates:
+            # Проверка: водитель должен иметь заполненный region
+            if not driver.region:
+                logger.warning(f'Водитель {driver.id} ({driver.name}) пропущен: не заполнен region')
+                continue
+            
             # Проверка рейтинга
             if driver.rating < self.config.min_rating:
                 continue
@@ -132,6 +158,8 @@ class MatchingService:
                 continue
             
             filtered.append(driver)
+        
+        logger.info(f'Для заказа {order.id} найдено кандидатов после фильтрации: {len(filtered)} из {candidates_after_region} (район: {pickup_region.title})')
         
         return filtered
     
@@ -350,8 +378,20 @@ class MatchingService:
     def _expand_search(self, order: Order) -> Dict:
         """
         Расширение поиска при отсутствии кандидатов
-        Увеличивает ETA_max и радиус поиска
+        Увеличивает ETA_max и радиус поиска, НО НЕ расширяет на другие районы
+        Район остается жестким условием
         """
+        # Получаем район заказа
+        pickup_region = order.pickup_region or (order.passenger.region if hasattr(order, 'passenger') and order.passenger else None)
+        if not pickup_region:
+            return {
+                'success': False,
+                'error': 'Не удалось определить район заказа для расширения поиска',
+                'suggestion': 'Проверьте координаты pickup или регион пассажира'
+            }
+        
+        logger.info(f'Расширение поиска для заказа {order.id} в районе {pickup_region.title} (увеличение ETA, но не расширение на другие районы)')
+        
         # Увеличиваем максимальный ETA
         original_eta_max = self.config.eta_max_seconds
         expanded_eta_max = int(original_eta_max * self.config.expand_eta_multiplier)
@@ -360,7 +400,7 @@ class MatchingService:
         old_config = self.config
         self.config.eta_max_seconds = expanded_eta_max
         
-        # Повторяем поиск
+        # Повторяем поиск (район останется тем же, так как _filter_candidates использует order.pickup_region)
         candidates = self._filter_candidates(order)
         
         # Восстанавливаем конфигурацию
@@ -369,8 +409,8 @@ class MatchingService:
         if not candidates:
             return {
                 'success': False,
-                'error': 'Нет подходящих водителей даже после расширения поиска',
-                'suggestion': 'Попробуйте позже или увеличьте радиус поиска'
+                'error': f'Нет подходящих водителей в районе "{pickup_region.title}" даже после расширения ETA',
+                'suggestion': 'Попробуйте позже, когда в этом районе появятся свободные водители'
             }
         
         # Продолжаем с расширенным поиском

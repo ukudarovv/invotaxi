@@ -129,5 +129,33 @@ export const driversApi = {
   async deleteDriver(driverId: number): Promise<void> {
     await api.delete(`/drivers/${driverId}/`);
   },
+
+  /**
+   * Скачать шаблон Excel для импорта водителей
+   */
+  async downloadTemplate(): Promise<Blob> {
+    const response = await api.get('/drivers/template/', {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
+
+  /**
+   * Импорт водителей из Excel файла
+   */
+  async importDrivers(file: File, options?: { skipErrors?: boolean; dryRun?: boolean }): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.skipErrors) {
+      formData.append('skip_errors', 'true');
+    }
+    if (options?.dryRun) {
+      formData.append('dry_run', 'true');
+    }
+
+    // Не устанавливаем Content-Type вручную - axios автоматически установит его с правильным boundary для FormData
+    const response = await api.post('/drivers/import/', formData);
+    return response.data;
+  },
 };
 

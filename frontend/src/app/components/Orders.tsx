@@ -1,0 +1,2722 @@
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Search, Filter, Plus, Eye, Edit, X, Check, UserCircle, Car as CarIcon, Phone, Loader2, ArrowUpDown, ArrowUp, ArrowDown, MapPin, Sparkles, Upload, Download } from "lucide-react";
+import { Modal } from "./Modal";
+import { ordersApi, Order, ImportResult } from "../services/orders";
+import { passengersApi, Passenger } from "../services/passengers";
+import { dispatchApi } from "../services/dispatch";
+import { regionsApi, Region } from "../services/regions";
+import { format } from "date-fns";
+import { RouteMapPicker } from "./RouteMapPicker";
+import { RouteMapView } from "./RouteMapView";
+import { toast } from "sonner";
+import { debounce } from "../utils/debounce";
+
+const statuses = ["Все", "Ожидание", "В пути", "Выполнено", "Отменён"];
+
+// Маппинг статусов API на отображаемые
+const statusMap: Record<string, string> = {
+  "draft": "Черновик",
+  "submitted": "Отправлено",
+  "awaiting_dispatcher_decision": "Ожидание решения диспетчера",
+  "rejected": "Отклонено",
+  "active_queue": "В очереди",
+  "assigned": "Назначено",
+  "driver_en_route": "Водитель в пути",
+  "arrived_waiting": "Ожидание пассажира",
+  "no_show": "Пассажир не пришел",
+  "ride_ongoing": "Поездка началась",
+  "completed": "Завершено",
+  "cancelled": "Отменено",
+  "incident": "Инцидент",
+};
+
+interface OrdersProps {
+  selectedOrderId?: string | null;
+  onOrderClose?: () => void;
+}
+
+type SortField = 'id' | 'created_at' | 'status' | 'price' | 'passenger';
+type SortDirection = 'asc' | 'desc';
+
+export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState("Все");
+  const [sortField, setSortField] = useState<SortField>('created_at');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [viewModal, setViewModal] = useState<string | null>(null);
+  const [editModal, setEditModal] = useState<string | null>(null);
+  const [assignModal, setAssignModal] = useState<string | null>(null);
+  const [selectedDriverId, setSelectedDriverId] = useState<number | null>(null);
+  const [candidates, setCandidates] = useState<any[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [callModal, setCallModal] = useState<{ name: string; phone: string; type: string } | null>(null);
+  const [createModal, setCreateModal] = useState(false);
+  const [editingStatus, setEditingStatus] = useState<string>("");
+  const [editingNote, setEditingNote] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  
+  // Состояние для создания заказа
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [dropoffAddress, setDropoffAddress] = useState("");
+  const [pickupCoords, setPickupCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [selectedPassengerId, setSelectedPassengerId] = useState<string>("");
+  const [orderDate, setOrderDate] = useState<string>("");
+  const [orderTime, setOrderTime] = useState<string>("");
+  const [orderNote, setOrderNote] = useState("");
+  const [creatingOrder, setCreatingOrder] = useState(false);
+  const [passengers, setPassengers] = useState<Passenger[]>([]);
+  
+  // Состояние для формы пассажира
+  const [passengerPhone, setPassengerPhone] = useState("");
+  const [passengerName, setPassengerName] = useState("");
+  const [passengerRegionId, setPassengerRegionId] = useState<string>("");
+  const [passengerDisabilityCategory, setPassengerDisabilityCategory] = useState<string>("");
+  const [passengerAllowedCompanion, setPassengerAllowedCompanion] = useState(false);
+  const [matchingPassengers, setMatchingPassengers] = useState<Passenger[]>([]);
+  const [searchingPassenger, setSearchingPassenger] = useState(false);
+  const [selectedPassengerMode, setSelectedPassengerMode] = useState<'existing' | 'new' | null>(null);
+  const [selectedExistingPassengerId, setSelectedExistingPassengerId] = useState<number | null>(null);
+  const [regions, setRegions] = useState<Region[]>([]);
+  
+  // Состояния для геокодирования
+  const [geocodingPickup, setGeocodingPickup] = useState(false);
+  const [geocodingDropoff, setGeocodingDropoff] = useState(false);
+  const [geocodeErrorPickup, setGeocodeErrorPickup] = useState<string | null>(null);
+  const [geocodeErrorDropoff, setGeocodeErrorDropoff] = useState<string | null>(null);
+  
+  // Состояния для ручного ввода координат
+  const [pickupLatInput, setPickupLatInput] = useState<string>("");
+  const [pickupLonInput, setPickupLonInput] = useState<string>("");
+  const [dropoffLatInput, setDropoffLatInput] = useState<string>("");
+  const [dropoffLonInput, setDropoffLonInput] = useState<string>("");
+  
+  // Refs для хранения debounced функций
+  const geocodePickupRef = useRef<ReturnType<typeof debounce>>();
+  const geocodeDropoffRef = useRef<ReturnType<typeof debounce>>();
+  const [generateModal, setGenerateModal] = useState(false);
+  const [generatingOrders, setGeneratingOrders] = useState(false);
+  const [ordersCount, setOrdersCount] = useState(5);
+  
+  // Импорт/экспорт
+  const [importModal, setImportModal] = useState(false);
+  const [exportModal, setExportModal] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importOptions, setImportOptions] = useState({ dryRun: false, skipErrors: false });
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+
+  // Load orders from API
+  useEffect(() => {
+    const loadOrders = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await ordersApi.getOrders();
+        setOrders(data);
+      } catch (err: any) {
+        setError(err.message || "Ошибка загрузки заказов");
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadOrders();
+  }, []);
+
+  // Load passengers from API
+  useEffect(() => {
+    const loadPassengers = async () => {
+      try {
+        const data = await passengersApi.getPassengers();
+        setPassengers(data);
+      } catch (err: any) {
+        console.error("Ошибка загрузки пассажиров:", err);
+      }
+    };
+    loadPassengers();
+  }, []);
+
+  // Load regions from API
+  useEffect(() => {
+    const loadRegions = async () => {
+      try {
+        const data = await regionsApi.getRegions();
+        setRegions(data);
+      } catch (err: any) {
+        console.error("Ошибка загрузки регионов:", err);
+      }
+    };
+    loadRegions();
+  }, []);
+
+  // Debounced search for passengers by phone
+  useEffect(() => {
+    const searchPassengers = async () => {
+      if (!passengerPhone || passengerPhone.trim().length < 3) {
+        setMatchingPassengers([]);
+        // Если телефон полностью очищен, сбрасываем все
+        if (!passengerPhone || passengerPhone.trim().length === 0) {
+          setSelectedPassengerMode(null);
+          setSelectedExistingPassengerId(null);
+          setPassengerName("");
+          setPassengerRegionId("");
+          setPassengerDisabilityCategory("");
+          setPassengerAllowedCompanion(false);
+        }
+        return;
+      }
+
+      setSearchingPassenger(true);
+      try {
+        const results = await passengersApi.searchPassengersByPhone(passengerPhone);
+        setMatchingPassengers(results);
+        
+        // Если найден один пассажир и режим еще не установлен, автоматически предлагаем его
+        if (results.length === 1 && selectedPassengerMode === null) {
+          setSelectedPassengerMode('existing');
+          setSelectedExistingPassengerId(results[0].id);
+        } else if (results.length === 0 && selectedPassengerMode === null) {
+          setSelectedPassengerMode('new');
+          setSelectedExistingPassengerId(null);
+        }
+        // Если пользователь уже выбрал режим "новый", не меняем его автоматически
+      } catch (err: any) {
+        console.error("Ошибка поиска пассажиров:", err);
+        setMatchingPassengers([]);
+      } finally {
+        setSearchingPassenger(false);
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      searchPassengers();
+    }, 600);
+
+    return () => clearTimeout(timeoutId);
+  }, [passengerPhone, selectedPassengerMode]);
+
+  // Установка текущей даты и времени по умолчанию
+  useEffect(() => {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    setOrderDate(tomorrow.toISOString().split('T')[0]);
+    setOrderTime("10:00");
+  }, []);
+
+  // Функция геокодирования адреса отправления
+  const geocodePickupAddress = useCallback(async (address: string) => {
+    const trimmedAddress = address?.trim();
+    if (!trimmedAddress) {
+      setGeocodeErrorPickup(null);
+      setGeocodingPickup(false);
+      setPickupCoords(null); // Сбрасываем координаты при пустом адресе
+      return;
+    }
+
+    setGeocodingPickup(true);
+    setGeocodeErrorPickup(null);
+
+    try {
+      const result = await ordersApi.geocodeAddress(trimmedAddress);
+      if (result.status === 'ok' && result.lat && result.lon) {
+        // Всегда обновляем координаты, даже если они похожи
+        const newCoords = { lat: result.lat, lon: result.lon };
+        setPickupCoords(newCoords);
+        // Обновляем поля ввода координат
+        setPickupLatInput(result.lat.toFixed(6));
+        setPickupLonInput(result.lon.toFixed(6));
+        setGeocodeErrorPickup(null);
+        console.log('Координаты обновлены для адреса отправления:', newCoords);
+      } else {
+        setPickupCoords(null); // Сбрасываем координаты если адрес не найден
+        setGeocodeErrorPickup(result.error || 'Адрес не найден');
+      }
+    } catch (err: any) {
+      console.error('Ошибка геокодирования адреса отправления:', err);
+      const errorMessage = err.response?.data?.error || err.message || 'Ошибка геокодирования';
+      setGeocodeErrorPickup(errorMessage);
+      setPickupCoords(null); // Сбрасываем координаты при ошибке
+    } finally {
+      setGeocodingPickup(false);
+    }
+  }, []);
+
+  // Функция геокодирования адреса назначения
+  const geocodeDropoffAddress = useCallback(async (address: string) => {
+    const trimmedAddress = address?.trim();
+    if (!trimmedAddress) {
+      setGeocodeErrorDropoff(null);
+      setGeocodingDropoff(false);
+      setDropoffCoords(null); // Сбрасываем координаты при пустом адресе
+      return;
+    }
+
+    setGeocodingDropoff(true);
+    setGeocodeErrorDropoff(null);
+
+    try {
+      const result = await ordersApi.geocodeAddress(trimmedAddress);
+      if (result.status === 'ok' && result.lat && result.lon) {
+        // Всегда обновляем координаты, даже если они похожи
+        const newCoords = { lat: result.lat, lon: result.lon };
+        setDropoffCoords(newCoords);
+        // Обновляем поля ввода координат
+        setDropoffLatInput(result.lat.toFixed(6));
+        setDropoffLonInput(result.lon.toFixed(6));
+        setGeocodeErrorDropoff(null);
+        console.log('Координаты обновлены для адреса назначения:', newCoords);
+      } else {
+        setDropoffCoords(null); // Сбрасываем координаты если адрес не найден
+        setGeocodeErrorDropoff(result.error || 'Адрес не найден');
+      }
+    } catch (err: any) {
+      console.error('Ошибка геокодирования адреса назначения:', err);
+      const errorMessage = err.response?.data?.error || err.message || 'Ошибка геокодирования';
+      setGeocodeErrorDropoff(errorMessage);
+      setDropoffCoords(null); // Сбрасываем координаты при ошибке
+    } finally {
+      setGeocodingDropoff(false);
+    }
+  }, []);
+
+  // Создаем debounced функции при монтировании компонента
+  useEffect(() => {
+    geocodePickupRef.current = debounce(geocodePickupAddress, 800);
+    geocodeDropoffRef.current = debounce(geocodeDropoffAddress, 800);
+
+    return () => {
+      // Cleanup не требуется, так как debounce сам управляет таймерами
+    };
+  }, [geocodePickupAddress, geocodeDropoffAddress]);
+
+  // Обработчики изменения адресов с debounce
+  const handlePickupAddressChange = useCallback((value: string) => {
+    setPickupAddress(value);
+    // Очищаем ошибку при изменении адреса
+    setGeocodeErrorPickup(null);
+    // Сбрасываем координаты при изменении адреса, чтобы маркер обновился
+    setPickupCoords(null);
+    
+    // Вызываем геокодирование только если адрес не пустой
+    if (geocodePickupRef.current && value.trim()) {
+      geocodePickupRef.current(value);
+    } else if (!value.trim()) {
+      // Если адрес пустой, сбрасываем координаты и ошибки
+      setPickupCoords(null);
+      setGeocodeErrorPickup(null);
+    }
+  }, []);
+
+  const handleDropoffAddressChange = useCallback((value: string) => {
+    setDropoffAddress(value);
+    // Очищаем ошибку при изменении адреса
+    setGeocodeErrorDropoff(null);
+    // Сбрасываем координаты при изменении адреса, чтобы маркер обновился
+    setDropoffCoords(null);
+    
+    // Вызываем геокодирование только если адрес не пустой
+    if (geocodeDropoffRef.current && value.trim()) {
+      geocodeDropoffRef.current(value);
+    } else if (!value.trim()) {
+      // Если адрес пустой, сбрасываем координаты и ошибки
+      setDropoffCoords(null);
+      setGeocodeErrorDropoff(null);
+    }
+  }, []);
+
+  // Синхронизация полей ввода координат с состоянием координат
+  useEffect(() => {
+    if (pickupCoords) {
+      const latStr = pickupCoords.lat.toFixed(6);
+      const lonStr = pickupCoords.lon.toFixed(6);
+      // Обновляем только если значения отличаются, чтобы не сбрасывать ввод пользователя
+      if (pickupLatInput !== latStr) {
+        setPickupLatInput(latStr);
+      }
+      if (pickupLonInput !== lonStr) {
+        setPickupLonInput(lonStr);
+      }
+    } else if (!pickupAddress.trim()) {
+      // Сбрасываем только если адрес тоже пустой
+      setPickupLatInput("");
+      setPickupLonInput("");
+    }
+  }, [pickupCoords?.lat, pickupCoords?.lon]);
+
+  useEffect(() => {
+    if (dropoffCoords) {
+      const latStr = dropoffCoords.lat.toFixed(6);
+      const lonStr = dropoffCoords.lon.toFixed(6);
+      // Обновляем только если значения отличаются, чтобы не сбрасывать ввод пользователя
+      if (dropoffLatInput !== latStr) {
+        setDropoffLatInput(latStr);
+      }
+      if (dropoffLonInput !== lonStr) {
+        setDropoffLonInput(lonStr);
+      }
+    } else if (!dropoffAddress.trim()) {
+      // Сбрасываем только если адрес тоже пустой
+      setDropoffLatInput("");
+      setDropoffLonInput("");
+    }
+  }, [dropoffCoords?.lat, dropoffCoords?.lon]);
+
+  // Обработчик создания заказа
+  const handleCreateOrder = async () => {
+    // Валидация пассажира
+    if (!passengerPhone || passengerPhone.trim().length === 0) {
+      toast.error("Введите телефон пассажира");
+      return;
+    }
+
+    // Определяем режим работы с пассажиром
+    let useExistingPassenger = false;
+    let useNewPassenger = false;
+    let passengerIdToUse: number | null = null;
+    
+    // Если найден пассажир и он выбран или режим не установлен - используем существующего
+    if (selectedPassengerMode === 'existing' && selectedExistingPassengerId) {
+      useExistingPassenger = true;
+      passengerIdToUse = selectedExistingPassengerId;
+    } else if (matchingPassengers.length > 0 && selectedPassengerMode !== 'new') {
+      // Если найден пассажир и режим не "новый", используем первого найденного
+      useExistingPassenger = true;
+      passengerIdToUse = selectedExistingPassengerId || matchingPassengers[0].id;
+    } else {
+      // Во всех остальных случаях создаем нового пассажира
+      useNewPassenger = true;
+      // Валидация для нового пассажира
+      if (!passengerName || passengerName.trim().length === 0) {
+        toast.error("Введите имя пассажира");
+        return;
+      }
+      if (!passengerDisabilityCategory) {
+        toast.error("Выберите категорию инвалидности");
+        return;
+      }
+    }
+
+    if (!pickupCoords) {
+      toast.error("Выберите точку на карте для места отправления");
+      return;
+    }
+
+    if (!dropoffCoords) {
+      toast.error("Выберите точку на карте для места назначения");
+      return;
+    }
+
+    if (!orderDate || !orderTime) {
+      toast.error("Укажите дату и время поездки");
+      return;
+    }
+
+    try {
+      setCreatingOrder(true);
+
+      // Формируем дату и время
+      const [hours, minutes] = orderTime.split(':');
+      const desiredPickupTime = new Date(orderDate);
+      desiredPickupTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+      // Создаем заказ
+      // Используем адрес, если указан, иначе используем координаты как адрес
+      const pickupTitle = pickupAddress.trim() || `${pickupCoords.lat.toFixed(6)}, ${pickupCoords.lon.toFixed(6)}`;
+      const dropoffTitle = dropoffAddress.trim() || `${dropoffCoords.lat.toFixed(6)}, ${dropoffCoords.lon.toFixed(6)}`;
+      
+      const orderData: any = {
+        pickup_title: pickupTitle,
+        dropoff_title: dropoffTitle,
+        pickup_lat: pickupCoords.lat,
+        pickup_lon: pickupCoords.lon,
+        dropoff_lat: dropoffCoords.lat,
+        dropoff_lon: dropoffCoords.lon,
+        desired_pickup_time: desiredPickupTime.toISOString(),
+        note: orderNote.trim() || undefined,
+        has_companion: false,
+      };
+
+      // Если выбран существующий пассажир и есть ID
+      if (useExistingPassenger && passengerIdToUse) {
+        orderData.passenger_id = passengerIdToUse;
+        console.log('Используем существующего пассажира:', passengerIdToUse);
+      } else {
+        // Создаем нового пассажира или используем телефон для поиска
+        // Проверяем, что телефон не пустой перед отправкой
+        const trimmedPhone = passengerPhone.trim();
+        if (!trimmedPhone) {
+          toast.error("Телефон пассажира не может быть пустым");
+          setCreatingOrder(false);
+          return;
+        }
+        
+        orderData.passenger_phone = trimmedPhone;
+        
+        // Если режим "new" или данные для нового пассажира заполнены, передаем их
+        if (useNewPassenger || passengerName || passengerDisabilityCategory) {
+          orderData.passenger_name = passengerName.trim() || `Пассажир ${trimmedPhone}`;
+          if (passengerRegionId) {
+            orderData.passenger_region_id = passengerRegionId;
+          }
+          orderData.passenger_disability_category = passengerDisabilityCategory || 'III группа';
+          orderData.passenger_allowed_companion = passengerAllowedCompanion;
+          console.log('Создаем нового пассажира:', {
+            phone: orderData.passenger_phone,
+            name: orderData.passenger_name,
+            category: orderData.passenger_disability_category,
+            region: orderData.passenger_region_id
+          });
+        } else {
+          // Если режим "existing", но ID не найден, передаем только телефон для поиска
+          console.log('Ищем существующего пассажира по телефону:', orderData.passenger_phone);
+        }
+      }
+
+      console.log('Отправляем данные заказа:', orderData);
+      const newOrder = await ordersApi.createOrder(orderData);
+      
+      toast.success("Заказ успешно создан!");
+      
+      // Обновляем список заказов
+      const updatedOrders = await ordersApi.getOrders();
+      setOrders(updatedOrders);
+      
+      // Закрываем модальное окно и сбрасываем форму
+      setCreateModal(false);
+      setGeocodeErrorPickup(null);
+      setGeocodeErrorDropoff(null);
+      // Сброс формы пассажира
+      setPassengerPhone("");
+      setPassengerName("");
+      setPassengerRegionId("");
+      setPassengerDisabilityCategory("");
+      setPassengerAllowedCompanion(false);
+      setMatchingPassengers([]);
+      setSelectedPassengerMode(null);
+      setSelectedExistingPassengerId(null);
+      setPickupAddress("");
+      setDropoffAddress("");
+      setPickupCoords(null);
+      setDropoffCoords(null);
+      setPickupLatInput("");
+      setPickupLonInput("");
+      setDropoffLatInput("");
+      setDropoffLonInput("");
+      setSelectedPassengerId("");
+      setOrderNote("");
+      const now = new Date();
+      const tomorrow = new Date(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setOrderDate(tomorrow.toISOString().split('T')[0]);
+      setOrderTime("10:00");
+    } catch (err: any) {
+      console.error("Ошибка создания заказа:", err);
+      toast.error(err.response?.data?.detail || err.message || "Ошибка создания заказа");
+    } finally {
+      setCreatingOrder(false);
+    }
+  };
+
+  // Auto-open order if selectedOrderId is provided
+  useEffect(() => {
+    if (selectedOrderId) {
+      setViewModal(selectedOrderId);
+    }
+  }, [selectedOrderId]);
+
+  // Handle modal close and notify parent
+  const handleViewModalClose = () => {
+    setViewModal(null);
+    if (onOrderClose) {
+      onOrderClose();
+    }
+  };
+
+  // Refresh orders after status update
+  const refreshOrders = async () => {
+    try {
+      const data = await ordersApi.getOrders();
+      setOrders(data);
+    } catch (err: any) {
+      setError(err.message || "Ошибка обновления заказов");
+    }
+  };
+
+  // Load candidates when assign modal opens
+  useEffect(() => {
+    const loadCandidates = async () => {
+      if (assignModal) {
+        try {
+          setLoadingCandidates(true);
+          setError(null);
+          
+          // Проверяем статус заказа и переводим в active_queue если нужно
+          const order = orders.find(o => o.id === assignModal);
+          
+          // Блокируем назначение для завершенных и отмененных заказов
+          const blockedStatuses = ['completed', 'cancelled'];
+          if (order && blockedStatuses.includes(order.status)) {
+            setError(`Нельзя назначить водителя на заказ в статусе "${statusMap[order.status] || order.status}". Заказ уже завершен или отменен.`);
+            setCandidates([]);
+            setLoadingCandidates(false);
+            return;
+          }
+          
+          if (order && order.status !== 'active_queue') {
+            // Проверяем, можно ли перевести в active_queue
+            const canTransitionToQueue = [
+              'submitted',
+              'awaiting_dispatcher_decision',
+              'matching',
+              'cancelled',
+              'rejected'
+            ].includes(order.status);
+            
+            if (canTransitionToQueue) {
+              // Переводим заказ в статус active_queue
+              try {
+                await ordersApi.updateOrderStatus(assignModal, {
+                  status: 'active_queue',
+                  reason: 'Перевод в очередь для назначения водителя'
+                });
+                // Обновляем список заказов
+                await refreshOrders();
+              } catch (statusErr: any) {
+                // Получаем детальное сообщение об ошибке
+                const errorDetails = statusErr.response?.data;
+                let errorMessage = statusErr.message || 'Не удалось перевести заказ в очередь';
+                
+                if (errorDetails?.error) {
+                  errorMessage = errorDetails.error;
+                  if (errorDetails.valid_transitions && Array.isArray(errorDetails.valid_transitions) && errorDetails.valid_transitions.length > 0) {
+                    errorMessage += `\nДопустимые переходы из статуса "${order.status}": ${errorDetails.valid_transitions.join(', ')}`;
+                  }
+                }
+                
+                // Если ошибка связана с недопустимым переходом, пробуем назначить напрямую
+                // endpoint назначения сам обработает статус
+                if (errorDetails?.error?.includes('Недопустимый переход')) {
+                  console.warn(`Не удалось перевести заказ ${assignModal} в очередь, пробуем назначить напрямую`);
+                  // Продолжаем загрузку кандидатов - endpoint назначения сам разберется
+                } else {
+                  setError(errorMessage);
+                  setLoadingCandidates(false);
+                  return;
+                }
+              }
+            } else {
+              // Если нельзя перевести в очередь, пробуем назначить напрямую
+              // endpoint назначения сам переведет заказ в нужный статус
+              console.log(`Заказ ${order.id} в статусе ${order.status}, нельзя перевести в очередь, пробуем назначить напрямую`);
+            }
+          }
+          
+          const response = await dispatchApi.getCandidates(assignModal);
+          setCandidates(response.candidates || []);
+          setSelectedDriverId(null); // Reset selection
+        } catch (err: any) {
+          setError(err.message || "Ошибка загрузки кандидатов");
+          setCandidates([]);
+        } finally {
+          setLoadingCandidates(false);
+        }
+      }
+    };
+    loadCandidates();
+  }, [assignModal, orders]);
+
+  // Helper function to safely format numbers
+  const safeToFixed = useCallback((value: any, decimals: number = 2): string => {
+    if (value === null || value === undefined) return '0.00';
+    const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+    return !isNaN(num) ? num.toFixed(decimals) : '0.00';
+  }, []);
+
+  // Helper function to safely convert to number
+  const safeToNumber = useCallback((value: any): number => {
+    if (value === null || value === undefined) return 0;
+    const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+    return !isNaN(num) ? num : 0;
+  }, []);
+
+  // Helper function to format order for display (moved before useMemo that uses it)
+  const formatOrderForDisplay = useCallback((order: Order) => {
+    const displayStatus = statusMap[order.status] || order.status;
+    const date = new Date(order.created_at);
+    const priceRaw = order.final_price || order.estimated_price || order.quote;
+    // Преобразуем price в число, если это строка или Decimal
+    const price = priceRaw ? (typeof priceRaw === 'string' ? parseFloat(priceRaw) : Number(priceRaw)) : null;
+    return {
+      id: order.id,
+      passenger: order.passenger.full_name,
+      driver: order.driver?.name || "Неназначен",
+      from: order.pickup_title,
+      to: order.dropoff_title,
+      status: displayStatus,
+      time: format(date, "HH:mm"),
+      date: format(date, "dd.MM.yyyy"),
+      price: price && !isNaN(price) ? `${price.toFixed(2)} ₸` : "—",
+      priceValue: price && !isNaN(price) ? price : 0,
+      distance: order.distance_km,
+      order: order,
+    };
+  }, []);
+
+  // Find selected order data (using useMemo to ensure it's computed correctly)
+  const selectedOrderData = useMemo(() => {
+    return orders.find(
+      (o) => o.id === viewModal || o.id === editModal || o.id === assignModal
+    );
+  }, [orders, viewModal, editModal, assignModal]);
+
+  const selectedOrder = useMemo(() => {
+    return selectedOrderData ? formatOrderForDisplay(selectedOrderData) : null;
+  }, [selectedOrderData, formatOrderForDisplay]);
+
+  // Get available status transitions (соответствует логике бэкенда из OrderService.validate_status_transition)
+  const getAvailableStatuses = (currentStatus: string): string[] => {
+    // Валидные переходы для каждого статуса (точно соответствуют бэкенду)
+    const statusTransitions: Record<string, string[]> = {
+      'draft': ['submitted', 'cancelled'],
+      'submitted': ['awaiting_dispatcher_decision', 'rejected', 'cancelled'],
+      'awaiting_dispatcher_decision': ['active_queue', 'rejected', 'cancelled'],
+      'rejected': ['submitted', 'cancelled'], // Можно восстановить отклоненный заказ, вернув в submitted
+      'active_queue': ['assigned', 'cancelled'],
+      'assigned': ['driver_en_route', 'cancelled'],
+      'driver_en_route': ['arrived_waiting', 'cancelled'],
+      'arrived_waiting': ['ride_ongoing', 'no_show', 'cancelled'],
+      'no_show': ['cancelled'],
+      'ride_ongoing': ['completed', 'incident', 'cancelled'],
+      'incident': ['completed', 'cancelled'],
+      'completed': [], // Завершенный заказ нельзя изменить (нет переходов в бэкенде)
+      'cancelled': ['submitted', 'active_queue'], // Можно восстановить отмененный заказ
+    };
+
+    // Возвращаем валидные переходы для текущего статуса
+    const validTransitions = statusTransitions[currentStatus];
+    return validTransitions || [];
+  };
+
+  // Handle edit modal open
+  useEffect(() => {
+    if (editModal && selectedOrderData) {
+      setEditingStatus(selectedOrderData.status);
+      setEditingNote(selectedOrderData.note || "");
+    }
+  }, [editModal, selectedOrderData]);
+
+  // Handle save order edit
+  const handleSaveOrder = async () => {
+    if (!editModal || !selectedOrderData) return;
+
+    try {
+      setSaving(true);
+      setError(null);
+
+      // Если статус изменился, обновляем через updateOrderStatus
+      if (editingStatus !== selectedOrderData.status) {
+        await ordersApi.updateOrderStatus(editModal, {
+          status: editingStatus,
+          reason: `Изменение статуса с ${selectedOrderData.status} на ${editingStatus}`
+        });
+      }
+
+      // Если примечание изменилось, обновляем через updateOrder
+      if (editingNote !== (selectedOrderData.note || "")) {
+        await ordersApi.updateOrder(editModal, {
+          note: editingNote
+        });
+      }
+
+      // Обновляем список заказов
+      await refreshOrders();
+      setEditModal(null);
+      setEditingStatus("");
+      setEditingNote("");
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || err.message || "Ошибка сохранения заказа";
+      setError(errorMessage);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Generate random coordinates within city bounds (Атырау)
+  const generateRandomCoordinates = () => {
+    // Центр Атырау: 47.10869114222083, 51.9049072265625
+    // Генерируем координаты в радиусе примерно 10 км от центра
+    const centerLat = 47.10869114222083;
+    const centerLon = 51.9049072265625;
+    const radiusKm = 10;
+    
+    // Примерно 1 градус широты = 111 км
+    // Примерно 1 градус долготы на этой широте ≈ 75 км
+    const latOffset = (Math.random() * 2 - 1) * (radiusKm / 111);
+    const lonOffset = (Math.random() * 2 - 1) * (radiusKm / 75);
+    
+    return {
+      lat: centerLat + latOffset,
+      lon: centerLon + lonOffset
+    };
+  };
+
+  // Generate random address
+  const generateRandomAddress = () => {
+    const streets = [
+      'ул. Абая',
+      'ул. Сатпаева',
+      'пр. Азаттык',
+      'ул. Байтурсынова',
+      'ул. Жамбыла',
+      'пр. Назарбаева',
+      'ул. Казыбек би',
+      'ул. Муканова',
+      'ул. Пушкина',
+      'ул. Ленина',
+      'ул. Гагарина',
+      'ул. Мира',
+      'ул. Центральная',
+      'ул. Новая',
+      'ул. Советская',
+      'ул. Ауэзова',
+      'ул. Достык',
+      'ул. Курмангазы',
+      'пр. Республики',
+      'ул. Шевченко'
+    ];
+    
+    const street = streets[Math.floor(Math.random() * streets.length)];
+    const building = Math.floor(Math.random() * 200) + 1;
+    
+    return `${street}, ${building}`;
+  };
+
+  // Generate test orders from random passengers
+  const handleGenerateTestOrders = async () => {
+    if (passengers.length === 0) {
+      toast.error("Нет доступных пассажиров для создания заказов");
+      return;
+    }
+
+    if (ordersCount < 1 || ordersCount > 50) {
+      toast.error("Количество заказов должно быть от 1 до 50");
+      return;
+    }
+
+    try {
+      setGeneratingOrders(true);
+      setError(null);
+
+      const createdOrders: string[] = [];
+      const errors: string[] = [];
+
+      for (let i = 0; i < ordersCount; i++) {
+        try {
+          // Выбираем случайного пассажира
+          const randomPassenger = passengers[Math.floor(Math.random() * passengers.length)];
+          
+          // Генерируем координаты для отправления и назначения
+          const pickupCoords = generateRandomCoordinates();
+          const dropoffCoords = generateRandomCoordinates();
+          
+          // Генерируем адреса
+          const pickupTitle = generateRandomAddress();
+          const dropoffTitle = generateRandomAddress();
+          
+          // Генерируем случайное время в ближайшие 2 часа
+          const desiredPickupTime = new Date();
+          desiredPickupTime.setHours(desiredPickupTime.getHours() + Math.floor(Math.random() * 2) + 1);
+          desiredPickupTime.setMinutes(Math.floor(Math.random() * 60));
+          
+          const orderData = {
+            pickup_title: pickupTitle,
+            dropoff_title: dropoffTitle,
+            pickup_lat: pickupCoords.lat,
+            pickup_lon: pickupCoords.lon,
+            dropoff_lat: dropoffCoords.lat,
+            dropoff_lon: dropoffCoords.lon,
+            desired_pickup_time: desiredPickupTime.toISOString(),
+            passenger_id: randomPassenger.id,
+            note: `Тестовый заказ #${i + 1}`,
+            has_companion: Math.random() > 0.7, // 30% вероятность сопровождения
+          };
+
+          const newOrder = await ordersApi.createOrder(orderData);
+          createdOrders.push(newOrder.id);
+          
+          // Небольшая задержка между запросами, чтобы не перегружать сервер
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (err: any) {
+          errors.push(`Заказ #${i + 1}: ${err.message || "Ошибка создания"}`);
+        }
+      }
+
+      // Обновляем список заказов
+      await refreshOrders();
+      
+      // Показываем результат
+      if (createdOrders.length > 0) {
+        toast.success(`Успешно создано ${createdOrders.length} из ${ordersCount} заказов`);
+      }
+      if (errors.length > 0) {
+        toast.error(`Ошибки при создании ${errors.length} заказов`);
+        console.error("Ошибки создания заказов:", errors);
+      }
+      
+      setGenerateModal(false);
+      setOrdersCount(5);
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.error || err.message || "Ошибка генерации заказов";
+      setError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setGeneratingOrders(false);
+    }
+  };
+
+  // Handle driver assignment
+  const handleAssignDriver = async () => {
+    if (!assignModal || !selectedDriverId) {
+      setError("Выберите водителя");
+      return;
+    }
+
+    // Проверяем, что выбранный водитель есть в списке кандидатов
+    const selectedDriver = candidates.find(c => String(c.driver_id) === String(selectedDriverId));
+    if (!selectedDriver && candidates.length > 0) {
+      console.warn(`Выбранный водитель ${selectedDriverId} не найден в списке кандидатов`);
+      // Продолжаем попытку назначения - возможно водитель был добавлен после загрузки кандидатов
+    }
+
+    try {
+      setAssigning(true);
+      setError(null);
+      
+      console.log(`Назначение водителя ${selectedDriverId} на заказ ${assignModal}`);
+      const response = await dispatchApi.assignOrder(assignModal, String(selectedDriverId));
+      
+      if (response.success) {
+        // Refresh orders list
+        await refreshOrders();
+        setAssignModal(null);
+        setSelectedDriverId(null);
+        setCandidates([]);
+        toast.success(`Водитель успешно назначен на заказ`);
+      } else {
+        const errorMsg = response.rejection_reason || response.error || response.reason || "Не удалось назначить водителя";
+        setError(errorMsg);
+        toast.error(errorMsg);
+      }
+    } catch (err: any) {
+      // Получаем детальное сообщение об ошибке
+      const errorDetails = err.response?.data;
+      let errorMessage = err.message || "Ошибка назначения водителя";
+      
+      console.error("Ошибка назначения водителя:", err);
+      console.error("Детали ошибки:", errorDetails);
+      console.error("Полный ответ:", err.response);
+      
+      if (errorDetails) {
+        if (errorDetails.error) {
+          errorMessage = errorDetails.error;
+          // Добавляем дополнительную информацию если есть
+          const details: string[] = [];
+          
+          if (errorDetails.current_status) {
+            details.push(`Текущий статус: ${errorDetails.current_status}`);
+          }
+          if (errorDetails.valid_transitions && Array.isArray(errorDetails.valid_transitions) && errorDetails.valid_transitions.length > 0) {
+            details.push(`Допустимые переходы: ${errorDetails.valid_transitions.join(', ')}`);
+          }
+          if (errorDetails.driver_name) {
+            details.push(`Водитель: ${errorDetails.driver_name}`);
+          }
+          if (errorDetails.is_online === false) {
+            details.push(`Водитель не онлайн. Включите онлайн статус.`);
+          }
+          if (errorDetails.driver_capacity !== undefined && errorDetails.required_seats !== undefined) {
+            details.push(`Вместимость: ${errorDetails.driver_capacity}, требуется: ${errorDetails.required_seats}`);
+          }
+          if (errorDetails.driver_status) {
+            details.push(`Статус водителя: ${errorDetails.driver_status}`);
+          }
+          
+          if (details.length > 0) {
+            errorMessage += '\n' + details.join('\n');
+          }
+        } else if (errorDetails.detail) {
+          errorMessage = errorDetails.detail;
+        } else if (typeof errorDetails === 'string') {
+          errorMessage = errorDetails;
+        }
+      }
+      
+      setError(errorMessage);
+      toast.error(errorMessage.split('\n')[0]); // Показываем только первую строку в toast
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const filteredAndSortedOrders = useMemo(() => {
+    // Фильтрация
+    let filtered = orders.filter((order) => {
+      const displayStatus = statusMap[order.status] || order.status;
+    const matchesSearch =
+      order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.passenger.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (order.driver?.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.pickup_title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        order.dropoff_title.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus =
+        selectedStatus === "Все" || displayStatus === selectedStatus;
+    return matchesSearch && matchesStatus;
+  });
+
+    // Сортировка
+    filtered = [...filtered].sort((a, b) => {
+      let aValue: any;
+      let bValue: any;
+
+      switch (sortField) {
+        case 'id':
+          aValue = a.id;
+          bValue = b.id;
+          break;
+        case 'created_at':
+          aValue = new Date(a.created_at).getTime();
+          bValue = new Date(b.created_at).getTime();
+          break;
+        case 'status':
+          aValue = statusMap[a.status] || a.status;
+          bValue = statusMap[b.status] || b.status;
+          break;
+        case 'price':
+          aValue = a.final_price || a.estimated_price || 0;
+          bValue = b.final_price || b.estimated_price || 0;
+          break;
+        case 'passenger':
+          aValue = a.passenger.full_name;
+          bValue = b.passenger.full_name;
+          break;
+        default:
+          return 0;
+      }
+
+      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return filtered;
+  }, [orders, searchTerm, selectedStatus, sortField, sortDirection]);
+
+  // Sort function
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const getSortIcon = (field: SortField) => {
+    if (sortField !== field) return <ArrowUpDown className="w-4 h-4" />;
+    return sortDirection === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />;
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case "Ожидание":
+        return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
+      case "В пути":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      case "Выполнено":
+        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      case "Отменён":
+        return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
+      default:
+        return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200";
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl dark:text-white">Управление заказами</h1>
+          <p className="text-gray-600 dark:text-gray-400">Просмотр и управление всеми заказами</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <button 
+            onClick={() => setGenerateModal(true)}
+            className="bg-purple-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 hidden"
+          >
+            <Sparkles className="w-5 h-5" />
+            Генерировать заказы
+          </button>
+          <button 
+            onClick={() => setImportModal(true)}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 hidden"
+          >
+            <Upload className="w-5 h-5" />
+            Импорт заказов
+          </button>
+          <button 
+            onClick={() => setExportModal(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 hidden"
+          >
+            <Download className="w-5 h-5" />
+            Экспорт по водителям
+          </button>
+          <button 
+            onClick={() => setCreateModal(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
+          >
+            <Plus className="w-5 h-5" />
+            Создать заказ
+          </button>
+        </div>
+      </div>
+
+      {/* Navigation Alert */}
+      {selectedOrderId && (
+        <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-700 rounded-lg p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center">
+            <Phone className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm text-indigo-900 dark:text-indigo-200">
+              <strong>Переход из модуля звонков</strong>
+            </p>
+            <p className="text-xs text-indigo-700 dark:text-indigo-300 mt-1">
+              Заказ {selectedOrderId} выделен и открыт
+            </p>
+          </div>
+          <button 
+            onClick={handleViewModalClose}
+            className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
+            <input
+              type="text"
+              placeholder="Поиск по ID, пассажиру или водителю..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+          <div className="flex gap-2">
+            {statuses.map((status) => (
+              <button
+                key={status}
+                onClick={() => setSelectedStatus(status)}
+                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                  selectedStatus === status
+                    ? "bg-indigo-600 text-white dark:bg-indigo-500"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                }`}
+              >
+                {status}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+          <p className="text-red-800 dark:text-red-200">{error}</p>
+        </div>
+      )}
+
+      {/* Orders Table */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+        {loading ? (
+          <div className="flex items-center justify-center p-12">
+            <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+            <span className="ml-3 text-gray-600 dark:text-gray-400">Загрузка заказов...</span>
+          </div>
+        ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
+              <tr>
+                  <th 
+                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                    onClick={() => handleSort('id')}
+                  >
+                    <div className="flex items-center gap-2">
+                  ID
+                      {getSortIcon('id')}
+                    </div>
+                </th>
+                  <th 
+                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                    onClick={() => handleSort('passenger')}
+                  >
+                    <div className="flex items-center gap-2">
+                  Пассажир
+                      {getSortIcon('passenger')}
+                    </div>
+                </th>
+                <th className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Водитель
+                </th>
+                <th className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Маршрут
+                </th>
+                  <th 
+                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                    onClick={() => handleSort('status')}
+                  >
+                    <div className="flex items-center gap-2">
+                  Статус
+                      {getSortIcon('status')}
+                    </div>
+                </th>
+                  <th 
+                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                    onClick={() => handleSort('created_at')}
+                  >
+                    <div className="flex items-center gap-2">
+                  Время
+                      {getSortIcon('created_at')}
+                    </div>
+                </th>
+                  <th 
+                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
+                    onClick={() => handleSort('price')}
+                  >
+                    <div className="flex items-center gap-2">
+                  Цена
+                      {getSortIcon('price')}
+                    </div>
+                </th>
+                <th className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                  Действия
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {filteredAndSortedOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                      Заказы не найдены
+                    </td>
+                  </tr>
+                ) : (
+                  filteredAndSortedOrders.map((order) => {
+                    const displayOrder = formatOrderForDisplay(order);
+                    return (
+                <tr 
+                  key={order.id} 
+                  className={`hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
+                    selectedOrderId === order.id 
+                      ? 'bg-indigo-50 dark:bg-indigo-900/20 ring-2 ring-indigo-500 dark:ring-indigo-400' 
+                      : ''
+                  }`}
+                >
+                  <td className="px-6 py-4 whitespace-nowrap dark:text-white">
+                          {displayOrder.id}
+                  </td>
+                        <td className="px-6 py-4 dark:text-white">{displayOrder.passenger}</td>
+                  <td className="px-6 py-4 dark:text-white">
+                          {displayOrder.driver === "Неназначен" ? (
+                            <span className="text-gray-400 dark:text-gray-500">{displayOrder.driver}</span>
+                    ) : (
+                            displayOrder.driver
+                    )}
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm">
+                            <p className="text-gray-900 dark:text-white">{displayOrder.from}</p>
+                            <p className="text-gray-500 dark:text-gray-400">→ {displayOrder.to}</p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`inline-block px-3 py-1 rounded-full text-xs ${getStatusColor(
+                              displayOrder.status
+                      )}`}
+                    >
+                            {displayOrder.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    <div>
+                            <p>{displayOrder.date}</p>
+                            <p>{displayOrder.time}</p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap dark:text-white">
+                          {displayOrder.price}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setViewModal(order.id)}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                        title="Просмотр"
+                      >
+                        <Eye className="w-5 h-5" />
+                      </button>
+                      <button
+                        onClick={() => setEditModal(order.id)}
+                        className="text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
+                        title="Редактировать"
+                      >
+                        <Edit className="w-5 h-5" />
+                      </button>
+                            {displayOrder.driver === "Неназначен" && 
+                        // Не показываем кнопку для завершенных заказов
+                        order.status !== 'completed' && (
+                        <button
+                          onClick={() => setAssignModal(order.id)}
+                          className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 hidden"
+                          title="Назначить водителя"
+                        >
+                          <CarIcon className="w-5 h-5" />
+                        </button>
+                      )}
+                      <button
+                              onClick={() => setCallModal({ 
+                                name: displayOrder.passenger, 
+                                phone: order.passenger.user.phone, 
+                                type: "passenger" 
+                              })}
+                        className="text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
+                        title="Позвонить пассажиру"
+                      >
+                        <Phone className="w-5 h-5" />
+                      </button>
+                            {displayOrder.driver !== "Неназначен" && order.driver && (
+                        <button
+                                onClick={() => setCallModal({ 
+                                  name: displayOrder.driver, 
+                                  phone: order.driver.user.phone, 
+                                  type: "driver" 
+                                })}
+                          className="text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300"
+                          title="Позвонить водителю"
+                        >
+                          <Phone className="w-5 h-5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+                    );
+                  })
+                )}
+            </tbody>
+          </table>
+        </div>
+        )}
+      </div>
+
+      {/* View Modal */}
+      <Modal
+        isOpen={viewModal !== null}
+        onClose={handleViewModalClose}
+        title="Детали заказа"
+        size="lg"
+      >
+        {selectedOrder && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">ID заказа</p>
+                <p className="text-lg dark:text-white font-mono">{selectedOrder.id}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Статус</p>
+                <span className={`inline-block px-3 py-1 rounded-full text-xs ${getStatusColor(selectedOrder.order.status)}`}>
+                  {selectedOrder.status}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Пассажир</p>
+              <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-2">
+                <div className="flex items-center gap-3">
+                  <UserCircle className="w-10 h-10 text-gray-400" />
+                  <div className="flex-1">
+                    <p className="dark:text-white font-medium">{selectedOrder.order.passenger.full_name}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.passenger.user.phone}</p>
+                    {selectedOrder.order.passenger.user.email && (
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.passenger.user.email}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                  {selectedOrder.order.passenger.region && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Регион</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.passenger.region.title}</p>
+                    </div>
+                  )}
+                  {selectedOrder.order.passenger.disability_category && (
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Категория</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.passenger.disability_category}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {selectedOrder.driver !== "Неназначен" && selectedOrder.order.driver && (
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Водитель</p>
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg space-y-2">
+                  <div className="flex items-center gap-3">
+                    <CarIcon className="w-10 h-10 text-gray-400" />
+                    <div className="flex-1">
+                      <p className="dark:text-white font-medium">{selectedOrder.order.driver.name}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder.order.driver.user.phone}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Машина</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.driver.car_model}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Гос. номер</p>
+                      <p className="text-sm dark:text-white">{selectedOrder.order.driver.plate_number}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Маршрут</p>
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-start gap-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                    <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs">A</div>
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Откуда</p>
+                      <p className="dark:text-white">{selectedOrder.from}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
+                    <div className="w-6 h-6 rounded-full bg-red-500 flex items-center justify-center text-white text-xs">B</div>
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Куда</p>
+                      <p className="dark:text-white">{selectedOrder.to}</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Мини-карта с маршрутом */}
+                {selectedOrder.order.pickup_lat && selectedOrder.order.pickup_lon && 
+                 selectedOrder.order.dropoff_lat && selectedOrder.order.dropoff_lon && (
+                  <RouteMapView
+                    pickupLat={selectedOrder.order.pickup_lat}
+                    pickupLon={selectedOrder.order.pickup_lon}
+                    dropoffLat={selectedOrder.order.dropoff_lat}
+                    dropoffLon={selectedOrder.order.dropoff_lon}
+                    pickupTitle={selectedOrder.from}
+                    dropoffTitle={selectedOrder.to}
+                    distanceKm={selectedOrder.order.distance_km}
+                    orderId={selectedOrder.id}
+                    height="250px"
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Желаемое время забора</p>
+                <p className="dark:text-white">
+                  {new Date(selectedOrder.order.desired_pickup_time).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Расстояние</p>
+                <p className="dark:text-white">{selectedOrder.order.distance_km ? `${safeToFixed(selectedOrder.order.distance_km, 2)} км` : "—"}</p>
+              </div>
+            </div>
+
+            {/* Дополнительная информация */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Создан</p>
+                <p className="dark:text-white">
+                  {new Date(selectedOrder.order.created_at).toLocaleString('ru-RU', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </p>
+              </div>
+              {selectedOrder.order.assigned_at && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Назначен</p>
+                  <p className="dark:text-white">
+                    {new Date(selectedOrder.order.assigned_at).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                </div>
+              )}
+              {selectedOrder.order.completed_at && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Завершен</p>
+                  <p className="dark:text-white">
+                    {new Date(selectedOrder.order.completed_at).toLocaleString('ru-RU', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </p>
+                </div>
+              )}
+              {selectedOrder.order.waiting_time_minutes && (
+                <div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Время ожидания</p>
+                  <p className="dark:text-white">{selectedOrder.order.waiting_time_minutes} мин</p>
+                </div>
+              )}
+            </div>
+
+            {/* Особенности заказа */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Особенности</p>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {selectedOrder.order.has_companion && (
+                    <span className="inline-block px-2 py-1 bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 rounded text-xs">
+                      С сопровождением
+                    </span>
+                  )}
+                  {selectedOrder.order.video_recording && (
+                    <span className="inline-block px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs">
+                      Видеозапись
+                    </span>
+                  )}
+                  {selectedOrder.order.seats_needed > 1 && (
+                    <span className="inline-block px-2 py-1 bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 rounded text-xs">
+                      Мест: {selectedOrder.order.seats_needed}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Координаты</p>
+                <div className="text-xs dark:text-gray-300 mt-1">
+                  <p>Откуда: {safeToFixed(selectedOrder.order.pickup_lat, 6)}, {safeToFixed(selectedOrder.order.pickup_lon, 6)}</p>
+                  <p>Куда: {safeToFixed(selectedOrder.order.dropoff_lat, 6)}, {safeToFixed(selectedOrder.order.dropoff_lon, 6)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Примечание */}
+            {selectedOrder.order.note && (
+              <div>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Примечание</p>
+                <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                  <p className="text-sm dark:text-white">{selectedOrder.order.note}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Причины */}
+            {(selectedOrder.order.assignment_reason || selectedOrder.order.rejection_reason) && (
+              <div className="space-y-2">
+                {selectedOrder.order.assignment_reason && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Причина назначения</p>
+                    <p className="text-sm dark:text-white p-2 bg-green-50 dark:bg-green-900/20 rounded">{selectedOrder.order.assignment_reason}</p>
+                  </div>
+                )}
+                {selectedOrder.order.rejection_reason && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Причина отклонения</p>
+                    <p className="text-sm dark:text-white p-2 bg-red-50 dark:bg-red-900/20 rounded">{selectedOrder.order.rejection_reason}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Цена */}
+            {(selectedOrder.order.final_price || selectedOrder.order.estimated_price) && (
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <div className="flex items-center justify-between p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                  <div>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {selectedOrder.order.final_price ? "Финальная стоимость" : "Предварительная стоимость"}
+                    </p>
+                    <p className="text-2xl font-bold text-green-600 dark:text-green-400 mt-1">
+                      {safeToFixed(selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸
+                    </p>
+                  </div>
+                  {selectedOrder.order.final_price && selectedOrder.order.estimated_price && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Было оценено</p>
+                      <p className="text-sm line-through text-gray-400">
+                        {safeToFixed(selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Детализация цены */}
+            {selectedOrder.order.price_breakdown && (
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Детализация стоимости</p>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Расстояние ({safeToFixed(selectedOrder.order.distance_km, 2)} км)</span>
+                    <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.base_distance_price)} ₸</span>
+                  </div>
+                  {selectedOrder.order.price_breakdown.waiting_time_price > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Ожидание ({selectedOrder.order.waiting_time_minutes || 0} мин)</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.waiting_time_price)} ₸</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.has_companion && selectedOrder.order.price_breakdown.companion_fee > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Доплата за сопровождение</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.companion_fee)} ₸</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.disability_multiplier && selectedOrder.order.price_breakdown.disability_multiplier !== 1.0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Множитель категории</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.disability_multiplier)}</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.night_multiplier && selectedOrder.order.price_breakdown.night_multiplier !== 1.0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Ночной тариф</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.night_multiplier)}</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.weekend_multiplier && selectedOrder.order.price_breakdown.weekend_multiplier !== 1.0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Выходной день</span>
+                      <span className="dark:text-white">×{safeToFixed(selectedOrder.order.price_breakdown.weekend_multiplier)}</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.minimum_fare_adjustment && selectedOrder.order.price_breakdown.minimum_fare_adjustment > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 dark:text-gray-400">Минимальная стоимость</span>
+                      <span className="dark:text-white">+{safeToFixed(selectedOrder.order.price_breakdown.minimum_fare_adjustment)} ₸</span>
+                    </div>
+                  )}
+                  {selectedOrder.order.price_breakdown.subtotal && (
+                    <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+                      <span className="text-gray-600 dark:text-gray-400">Промежуточный итог</span>
+                      <span className="dark:text-white">{safeToFixed(selectedOrder.order.price_breakdown.subtotal)} ₸</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700 font-semibold">
+                    <span className="text-gray-900 dark:text-white">Итого</span>
+                    <span className="text-xl text-green-600 dark:text-green-400">
+                      {selectedOrder.order.price_breakdown.total ? 
+                        `${safeToFixed(selectedOrder.order.price_breakdown.total)} ₸` : 
+                        (selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote ? 
+                          `${safeToFixed(selectedOrder.order.final_price || selectedOrder.order.estimated_price || selectedOrder.order.quote)} ₸` : 
+                          "—")}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <button className="flex-1 bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700">
+                На карте
+              </button>
+              <button
+                onClick={handleViewModalClose}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Edit Modal */}
+      <Modal
+        isOpen={editModal !== null}
+        onClose={() => {
+          setEditModal(null);
+          setEditingStatus("");
+          setEditingNote("");
+        }}
+        title="Редактировать заказ"
+        size="md"
+      >
+        {selectedOrder && (
+          <div className="space-y-4">
+            <div className="p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Заказ</p>
+              <p className="dark:text-white font-medium">{selectedOrder.id}</p>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Статус</label>
+              {getAvailableStatuses(selectedOrder.order.status).length > 0 ? (
+                <>
+                  <select
+                    value={editingStatus}
+                    onChange={(e) => setEditingStatus(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value={selectedOrder.order.status}>
+                      {statusMap[selectedOrder.order.status] || selectedOrder.order.status} (текущий)
+                    </option>
+                    {getAvailableStatuses(selectedOrder.order.status).map((status) => (
+                      <option key={status} value={status}>
+                        {statusMap[status] || status}
+                      </option>
+                    ))}
+              </select>
+                  {editingStatus !== selectedOrder.order.status && (
+                    <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                      Статус будет изменен с "{statusMap[selectedOrder.order.status] || selectedOrder.order.status}" на "{statusMap[editingStatus] || editingStatus}"
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 bg-gray-50">
+                  <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">
+                    {statusMap[selectedOrder.order.status] || selectedOrder.order.status}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Изменение статуса недоступно для этого заказа
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Примечания</label>
+              <textarea
+                value={editingNote}
+                onChange={(e) => setEditingNote(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Добавьте примечания к заказу..."
+              />
+            </div>
+
+            {error && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-4">
+              <button
+                onClick={handleSaveOrder}
+                disabled={saving}
+                className={`flex-1 py-2 rounded-lg flex items-center justify-center gap-2 transition-colors ${
+                  saving
+                    ? "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                    : "bg-indigo-600 text-white hover:bg-indigo-700"
+                }`}
+              >
+                {saving ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Сохранение...
+                  </>
+                ) : (
+                  <>
+                <Check className="w-5 h-5" />
+                Сохранить
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setEditModal(null);
+                  setEditingStatus("");
+                  setEditingNote("");
+                }}
+                disabled={saving}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Assign Driver Modal */}
+      <Modal
+        isOpen={assignModal !== null}
+        onClose={() => {
+          setAssignModal(null);
+          setSelectedDriverId(null);
+          setCandidates([]);
+          setError(null); // Очищаем ошибку при закрытии
+        }}
+        title="Назначить водителя"
+        size="md"
+      >
+        {selectedOrder && (
+          <div className="space-y-4">
+            <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Заказ</p>
+              <p className="dark:text-white">{selectedOrder.id} - {selectedOrder.passenger}</p>
+              {selectedOrder.status && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Статус: {statusMap[selectedOrder.status] || selectedOrder.status}
+                </p>
+              )}
+            </div>
+
+            {error && (
+              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-700 dark:text-red-400 whitespace-pre-line">{error}</p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <p className="text-sm text-gray-700 dark:text-gray-300">Доступные водители</p>
+              {loadingCandidates ? (
+                <div className="flex items-center justify-center p-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                  <span className="ml-3 text-gray-600 dark:text-gray-400">Загрузка водителей...</span>
+                </div>
+              ) : candidates.length === 0 ? (
+                <div className="text-center p-8 text-gray-500 dark:text-gray-400">
+                  Нет доступных водителей
+                </div>
+              ) : (
+                candidates.map((candidate) => (
+                <button
+                    key={candidate.driver_id}
+                    onClick={() => setSelectedDriverId(candidate.driver_id)}
+                    className={`w-full flex items-center gap-3 p-3 border rounded-lg transition-colors ${
+                      selectedDriverId === candidate.driver_id
+                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-400"
+                        : "border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                >
+                  <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                      {candidate.name[0]}
+                  </div>
+                  <div className="flex-1 text-left">
+                      <div className="flex items-center gap-2">
+                        <p className="dark:text-white font-medium">{candidate.name}</p>
+                        {!candidate.is_online && (
+                          <span className="px-2 py-0.5 text-xs bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 rounded">
+                            Офлайн
+                          </span>
+                        )}
+                        {candidate.is_online && (
+                          <span className="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">
+                            Онлайн
+                          </span>
+                        )}
+                  </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {candidate.car_model} • Вместимость: {candidate.capacity}
+                        {candidate.priority.distance !== null && candidate.priority.distance !== undefined && (
+                          <> • {safeToFixed(candidate.priority.distance, 1)} км</>
+                        )}
+                        {candidate.priority.region_match && (
+                          <span className="ml-2 text-green-600 dark:text-green-400">✓ Регион совпадает</span>
+                        )}
+                      </p>
+                    </div>
+                    {selectedDriverId === candidate.driver_id && (
+                  <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
+                    )}
+                </button>
+                ))
+              )}
+            </div>
+
+            <div className="flex gap-3 pt-4">
+              <button
+                onClick={handleAssignDriver}
+                disabled={!selectedDriverId || assigning}
+                className={`flex-1 py-2 rounded-lg transition-colors flex items-center justify-center gap-2 ${
+                  selectedDriverId && !assigning
+                    ? "bg-green-600 text-white hover:bg-green-700"
+                    : "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                }`}
+              >
+                {assigning ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    Назначение...
+                  </>
+                ) : (
+                  "Назначить"
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setAssignModal(null);
+                  setSelectedDriverId(null);
+                  setCandidates([]);
+                }}
+                disabled={assigning}
+                className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Call Modal */}
+      <Modal
+        isOpen={callModal !== null}
+        onClose={() => setCallModal(null)}
+        title={`Позвонить ${callModal?.type === 'passenger' ? 'пассажиру' : 'водителю'}`}
+        size="sm"
+        footer={
+          callModal ? (
+            <>
+              <button
+                onClick={() => setCallModal(null)}
+                className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              >
+                Отмена
+              </button>
+              <button className="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 shadow-lg shadow-green-500/30">
+                <Phone className="w-5 h-5" />
+                Позвонить
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        {callModal && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-4 p-4 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl border border-green-200 dark:border-green-800">
+              <div className="w-14 h-14 rounded-full bg-green-100 dark:bg-green-900 flex items-center justify-center ring-4 ring-green-50 dark:ring-green-900/50">
+                <Phone className="w-7 h-7 text-green-600 dark:text-green-400" />
+              </div>
+              <div className="flex-1">
+                <p className="dark:text-white mb-1">{callModal.name}</p>
+                <p className="text-sm text-gray-600 dark:text-gray-300 font-medium">{callModal.phone}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  {callModal.type === 'passenger' ? '👤 Пассажир' : '🚗 Водитель'}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <p className="text-sm text-blue-800 dark:text-blue-300">
+                💡 <strong>Совет:</strong> Убедитесь, что микрофон и наушники подключены перед началом звонка.
+              </p>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Показано {filteredAndSortedOrders.length} из {orders.length} заказов
+        </p>
+        <div className="flex gap-2">
+          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
+            Назад
+          </button>
+          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
+            1
+          </button>
+          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
+            2
+          </button>
+          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
+            Далее
+          </button>
+        </div>
+      </div>
+
+      {/* Create Order Modal */}
+      <Modal
+        isOpen={createModal}
+        onClose={() => {
+          setCreateModal(false);
+          setGeocodeErrorPickup(null);
+          setGeocodeErrorDropoff(null);
+          // Сброс состояния при закрытии
+          setPickupAddress("");
+          setDropoffAddress("");
+          setPickupCoords(null);
+          setDropoffCoords(null);
+          setPickupLatInput("");
+          setPickupLonInput("");
+          setDropoffLatInput("");
+          setDropoffLonInput("");
+          setSelectedPassengerId("");
+          setOrderNote("");
+          // Сброс формы пассажира
+          setPassengerPhone("");
+          setPassengerName("");
+          setPassengerRegionId("");
+          setPassengerDisabilityCategory("");
+          setPassengerAllowedCompanion(false);
+          setMatchingPassengers([]);
+          setSelectedPassengerMode(null);
+          setSelectedExistingPassengerId(null);
+          const now = new Date();
+          const tomorrow = new Date(now);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          setOrderDate(tomorrow.toISOString().split('T')[0]);
+          setOrderTime("10:00");
+        }}
+        title="Создать новый заказ"
+        size="xl"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setCreateModal(false);
+      setGeocodeErrorPickup(null);
+      setGeocodeErrorDropoff(null);
+                setPickupAddress("");
+                setDropoffAddress("");
+                setPickupCoords(null);
+                setDropoffCoords(null);
+                setSelectedPassengerId("");
+                setOrderNote("");
+                setGeocodeErrorPickup(null);
+                setGeocodeErrorDropoff(null);
+                // Сброс формы пассажира
+                setPassengerPhone("");
+                setPassengerName("");
+                setPassengerRegionId("");
+                setPassengerDisabilityCategory("");
+                setPassengerAllowedCompanion(false);
+                setMatchingPassengers([]);
+                setSelectedPassengerMode(null);
+                setSelectedExistingPassengerId(null);
+                const now = new Date();
+                const tomorrow = new Date(now);
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                setOrderDate(tomorrow.toISOString().split('T')[0]);
+                setOrderTime("10:00");
+              }}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={handleCreateOrder}
+              disabled={creatingOrder}
+              className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {creatingOrder ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Создание...
+                </>
+              ) : (
+                <>
+                  <Plus className="w-5 h-5" />
+                  Создать заказ
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {/* Форма выбора/создания пассажира */}
+          <div>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Пассажир *</label>
+            
+            {/* Поле ввода телефона */}
+            <div className="mb-3">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={passengerPhone}
+                  onChange={(e) => setPassengerPhone(e.target.value)}
+                  placeholder="Введите телефон пассажира"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                />
+                {searchingPassenger && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Найденные пассажиры */}
+            {matchingPassengers.length > 0 && selectedPassengerMode !== 'new' && (
+              <div className="mb-3 space-y-2">
+                <p className="text-sm text-gray-600 dark:text-gray-400">Найдены пассажиры:</p>
+                {matchingPassengers.map((passenger) => (
+                  <div
+                    key={passenger.id}
+                    className={`p-3 border rounded-lg cursor-pointer transition-colors ${
+                      selectedExistingPassengerId === passenger.id
+                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                        : 'border-gray-300 dark:border-gray-600 hover:border-indigo-300 dark:hover:border-indigo-700'
+                    }`}
+                    onClick={() => {
+                      setSelectedPassengerMode('existing');
+                      setSelectedExistingPassengerId(passenger.id);
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium dark:text-white">{passenger.full_name}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400">{passenger.user.phone}</p>
+                        {passenger.region && (
+                          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                            Регион: {passenger.region.title}
+                          </p>
+                        )}
+                      </div>
+                      {selectedExistingPassengerId === passenger.id && (
+                        <Check className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPassengerMode('new');
+                    setSelectedExistingPassengerId(null);
+                  }}
+                  className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+                >
+                  Добавить нового пассажира
+                </button>
+              </div>
+            )}
+
+            {/* Форма создания нового пассажира */}
+            {(selectedPassengerMode === 'new' || (matchingPassengers.length === 0 && passengerPhone.length >= 3)) && (
+              <div className="space-y-3 p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50">
+                <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {selectedPassengerMode === 'new' ? 'Добавление нового пассажира' : 'Пассажир не найден. Заполните данные для создания:'}
+                </p>
+                
+                <div>
+                  <label className="block text-sm mb-1 text-gray-700 dark:text-gray-300">Имя *</label>
+                  <input
+                    type="text"
+                    value={passengerName}
+                    onChange={(e) => setPassengerName(e.target.value)}
+                    placeholder="Полное имя пассажира"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm mb-1 text-gray-700 dark:text-gray-300">Категория инвалидности *</label>
+                  <select
+                    value={passengerDisabilityCategory}
+                    onChange={(e) => setPassengerDisabilityCategory(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="">Выберите категорию</option>
+                    <option value="I группа">I группа</option>
+                    <option value="II группа">II группа</option>
+                    <option value="III группа">III группа</option>
+                    <option value="Ребенок-инвалид">Ребенок-инвалид</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={passengerAllowedCompanion}
+                      onChange={(e) => setPassengerAllowedCompanion(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Разрешено сопровождение</span>
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Карта для выбора точек маршрута */}
+          <div>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300 flex items-center gap-2">
+              <MapPin className="w-4 h-4" />
+              Выберите маршрут на карте *
+            </label>
+            <RouteMapPicker
+              height="400px"
+              onPickupChange={(lat, lon) => {
+                setPickupCoords({ lat, lon });
+                setPickupLatInput(lat.toFixed(6));
+                setPickupLonInput(lon.toFixed(6));
+                setGeocodeErrorPickup(null);
+              }}
+              onDropoffChange={(lat, lon) => {
+                setDropoffCoords({ lat, lon });
+                setDropoffLatInput(lat.toFixed(6));
+                setDropoffLonInput(lon.toFixed(6));
+                setGeocodeErrorDropoff(null);
+              }}
+              initialPickup={pickupCoords ? { lat: pickupCoords.lat, lon: pickupCoords.lon } : undefined}
+              initialDropoff={dropoffCoords ? { lat: dropoffCoords.lat, lon: dropoffCoords.lon } : undefined}
+            />
+          </div>
+
+          {/* Поля для адресов */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                Откуда (адрес)
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={pickupAddress}
+                  onChange={(e) => handlePickupAddressChange(e.target.value)}
+                  placeholder="Введите адрес начала маршрута или выберите на карте"
+                  className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
+                    geocodeErrorPickup
+                      ? "border-red-300 dark:border-red-600"
+                      : "border-gray-300 dark:border-gray-600"
+                  }`}
+                />
+                {geocodingPickup && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  </div>
+                )}
+              </div>
+              {geocodeErrorPickup && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                  {geocodeErrorPickup}
+                </p>
+              )}
+              {/* Поля для ручного ввода координат */}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Широта
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={pickupLatInput}
+                    onChange={(e) => setPickupLatInput(e.target.value)}
+                    onBlur={() => {
+                      const lat = parseFloat(pickupLatInput);
+                      if (!isNaN(lat) && lat >= -90 && lat <= 90) {
+                        const lon = pickupCoords?.lon || parseFloat(pickupLonInput) || 51.8833;
+                        setPickupCoords({ lat, lon });
+                        setGeocodeErrorPickup(null);
+                      }
+                    }}
+                    placeholder="47.1167"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Долгота
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={pickupLonInput}
+                    onChange={(e) => setPickupLonInput(e.target.value)}
+                    onBlur={() => {
+                      const lon = parseFloat(pickupLonInput);
+                      if (!isNaN(lon) && lon >= -180 && lon <= 180) {
+                        const lat = pickupCoords?.lat || parseFloat(pickupLatInput) || 47.1167;
+                        setPickupCoords({ lat, lon });
+                        setGeocodeErrorPickup(null);
+                      }
+                    }}
+                    placeholder="51.8833"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                Куда (адрес)
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={dropoffAddress}
+                  onChange={(e) => handleDropoffAddressChange(e.target.value)}
+                  placeholder="Введите адрес назначения или выберите на карте"
+                  className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
+                    geocodeErrorDropoff
+                      ? "border-red-300 dark:border-red-600"
+                      : "border-gray-300 dark:border-gray-600"
+                  }`}
+                />
+                {geocodingDropoff && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                  </div>
+                )}
+              </div>
+              {geocodeErrorDropoff && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                  {geocodeErrorDropoff}
+                </p>
+              )}
+              {/* Поля для ручного ввода координат */}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Широта
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={dropoffLatInput}
+                    onChange={(e) => setDropoffLatInput(e.target.value)}
+                    onBlur={() => {
+                      const lat = parseFloat(dropoffLatInput);
+                      if (!isNaN(lat) && lat >= -90 && lat <= 90) {
+                        const lon = dropoffCoords?.lon || parseFloat(dropoffLonInput) || 51.8833;
+                        setDropoffCoords({ lat, lon });
+                        setGeocodeErrorDropoff(null);
+                      }
+                    }}
+                    placeholder="47.1167"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1 text-gray-600 dark:text-gray-400">
+                    Долгота
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={dropoffLonInput}
+                    onChange={(e) => setDropoffLonInput(e.target.value)}
+                    onBlur={() => {
+                      const lon = parseFloat(dropoffLonInput);
+                      if (!isNaN(lon) && lon >= -180 && lon <= 180) {
+                        const lat = dropoffCoords?.lat || parseFloat(dropoffLatInput) || 47.1167;
+                        setDropoffCoords({ lat, lon });
+                        setGeocodeErrorDropoff(null);
+                      }
+                    }}
+                    placeholder="51.8833"
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Дата *</label>
+              <input
+                type="date"
+                value={orderDate}
+                onChange={(e) => setOrderDate(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Время *</label>
+              <input
+                type="time"
+                value={orderTime}
+                onChange={(e) => setOrderTime(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Примечания</label>
+            <textarea
+              rows={3}
+              value={orderNote}
+              onChange={(e) => setOrderNote(e.target.value)}
+              placeholder="Дополнительная информация о заказе..."
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Generate Test Orders Modal */}
+      <Modal
+        isOpen={generateModal}
+        onClose={() => {
+          setGenerateModal(false);
+          setOrdersCount(5);
+        }}
+        title="Генерация тестовых заказов"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setGenerateModal(false);
+                setOrdersCount(5);
+              }}
+              disabled={generatingOrders}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
+            >
+              Отмена
+            </button>
+            <button
+              onClick={handleGenerateTestOrders}
+              disabled={generatingOrders || passengers.length === 0}
+              className={`px-6 py-2.5 rounded-lg flex items-center gap-2 transition-colors ${
+                generatingOrders || passengers.length === 0
+                  ? "bg-gray-300 dark:bg-gray-600 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                  : "bg-purple-600 text-white hover:bg-purple-700"
+              }`}
+            >
+              {generatingOrders ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Генерация...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-5 h-5" />
+                  Создать заказы
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {error && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          )}
+
+          {passengers.length === 0 ? (
+            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                ⚠️ Нет доступных пассажиров в базе данных. Сначала создайте пассажиров.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <p className="text-sm text-blue-800 dark:text-blue-300">
+                  💡 <strong>Информация:</strong> Будет создано {ordersCount} тестовых заказов от случайных пассажиров из базы данных. 
+                  Для каждого заказа будут сгенерированы случайные адреса и координаты в пределах города Атырау.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                  Количество заказов для генерации
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={ordersCount}
+                  onChange={(e) => setOrdersCount(parseInt(e.target.value) || 1)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 dark:bg-gray-700 dark:text-white"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  Доступно пассажиров: {passengers.length}
+                </p>
+              </div>
+
+              <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                <p className="font-medium dark:text-gray-300">Что будет сгенерировано:</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Случайные пассажиры из базы данных</li>
+                  <li>Случайные адреса отправления и назначения</li>
+                  <li>Случайные координаты в пределах города</li>
+                  <li>Время забора в ближайшие 2 часа</li>
+                  <li>30% вероятность сопровождения</li>
+                </ul>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* Import Orders Modal */}
+      <Modal
+        isOpen={importModal}
+        onClose={() => {
+          setImportModal(false);
+          setImportFile(null);
+          setImportOptions({ dryRun: false, skipErrors: false });
+          setImportResult(null);
+        }}
+        title="Импорт заказов из CSV"
+        size="lg"
+        footer={
+          <>
+            <button
+              onClick={() => {
+                setImportModal(false);
+                setImportFile(null);
+                setImportOptions({ dryRun: false, skipErrors: false });
+                setImportResult(null);
+              }}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={async () => {
+                if (!importFile) {
+                  toast.error("Выберите CSV файл");
+                  return;
+                }
+                
+                try {
+                  setImporting(true);
+                  const result = await ordersApi.importOrders(importFile, importOptions);
+                  setImportResult(result);
+                  
+                  if (result.success_count > 0) {
+                    toast.success(`Успешно импортировано: ${result.success_count} заказов`);
+                    if (!importOptions.dryRun) {
+                      await refreshOrders();
+                    }
+                  }
+                  if (result.failed_count > 0) {
+                    toast.warning(`Ошибок: ${result.failed_count}`);
+                  }
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || err.message || "Ошибка импорта");
+                } finally {
+                  setImporting(false);
+                }
+              }}
+              disabled={importing || !importFile}
+              className="px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {importing ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Импорт...
+                </>
+              ) : (
+                <>
+                  <Upload className="w-5 h-5" />
+                  Импортировать
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">CSV файл *</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  if (file.size > 10 * 1024 * 1024) {
+                    toast.error("Файл слишком большой (максимум 10MB)");
+                    return;
+                  }
+                  setImportFile(file);
+                  setImportResult(null);
+                }
+              }}
+              className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
+            />
+            {importFile && (
+              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                Выбран файл: {importFile.name} ({(importFile.size / 1024).toFixed(2)} KB)
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={importOptions.dryRun}
+                onChange={(e) => setImportOptions({ ...importOptions, dryRun: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              Только валидация (не создавать заказы)
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                type="checkbox"
+                checked={importOptions.skipErrors}
+                onChange={(e) => setImportOptions({ ...importOptions, skipErrors: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              Пропускать строки с ошибками
+            </label>
+          </div>
+
+          <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+            <p className="font-medium dark:text-gray-300">Формат CSV:</p>
+            <p>Обязательные поля: passenger_id или passenger_phone, pickup_title, pickup_lat, pickup_lon, dropoff_title, dropoff_lat, dropoff_lon, desired_pickup_time</p>
+            <p>Опциональные: has_companion, note, status</p>
+          </div>
+
+          {importResult && (
+            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <h3 className="font-semibold mb-2 text-gray-900 dark:text-white">Результаты импорта:</h3>
+              <div className="space-y-1 text-sm">
+                <p className="text-green-600 dark:text-green-400">
+                  Успешно: {importResult.success_count}
+                </p>
+                <p className="text-red-600 dark:text-red-400">
+                  Ошибок: {importResult.failed_count}
+                </p>
+                {importResult.errors.length > 0 && (
+                  <div className="mt-2">
+                    <p className="font-medium text-gray-700 dark:text-gray-300">Детали ошибок:</p>
+                    <div className="max-h-40 overflow-y-auto mt-1">
+                      {importResult.errors.slice(0, 10).map((error, idx) => (
+                        <p key={idx} className="text-xs text-red-600 dark:text-red-400">
+                          Строка {error.row}: {error.message}
+                        </p>
+                      ))}
+                      {importResult.errors.length > 10 && (
+                        <p className="text-xs text-gray-500">... и еще {importResult.errors.length - 10} ошибок</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Export Orders Modal */}
+      <Modal
+        isOpen={exportModal}
+        onClose={() => setExportModal(false)}
+        title="Экспорт заказов по водителям"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => setExportModal(false)}
+              className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Отмена
+            </button>
+            <button 
+              onClick={async () => {
+                try {
+                  setExporting(true);
+                  // Экспортируем все заказы с назначенными водителями (без фильтра по статусу для экспорта)
+                  const blob = await ordersApi.exportOrdersByDrivers();
+                  
+                  // Создаем ссылку и скачиваем файл
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `orders_export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.zip`;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  window.URL.revokeObjectURL(url);
+                  
+                  toast.success("Экспорт завершен, файл скачан");
+                  setExportModal(false);
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || err.message || "Ошибка экспорта");
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              disabled={exporting}
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {exporting ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Экспорт...
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5" />
+                  Экспортировать
+                </>
+              )}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            <p>Будут экспортированы все заказы с назначенными водителями.</p>
+            <p className="mt-2">Для каждого водителя будет создан отдельный CSV файл.</p>
+            <p className="mt-2">Все файлы будут упакованы в ZIP архив.</p>
+          </div>
+          {selectedStatus !== "Все" && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-blue-700 dark:text-blue-300">
+              Будет применен фильтр по статусу: {statusMap[selectedStatus.toLowerCase()] || selectedStatus}
+            </div>
+          )}
+        </div>
+      </Modal>
+    </div>
+  );
+}

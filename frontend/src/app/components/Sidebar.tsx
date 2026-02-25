@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   PlayCircle,
+  Route,
 } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
 import { useAuth } from "../context/AuthContext";
@@ -28,6 +29,7 @@ type PageType =
   | "analytics"
   | "logs"
   | "settings"
+  | "daily-routes"
   | "ride-simulation";
 
 interface MenuItem {
@@ -43,6 +45,7 @@ const menuItems: MenuItem[] = [
   { id: "drivers", label: "Водители", icon: Car, permission: "view_drivers" },
   { id: "passengers", label: "Пассажиры", icon: Users, permission: "view_passengers" },
   { id: "dispatch", label: "Диспетчеризация", icon: Radio, permission: "dispatch" },
+  { id: "daily-routes", label: "Маршруты на день", icon: Route, permission: "dispatch" },
   { id: "map", label: "Карта", icon: MapIcon, permission: "view_map" },
   { id: "regions", label: "Регионы", icon: MapPin, permission: "manage_regions" },
   { id: "analytics", label: "Аналитика", icon: BarChart3, permission: "view_analytics" },

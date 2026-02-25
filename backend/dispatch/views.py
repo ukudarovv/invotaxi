@@ -860,3 +860,30 @@ class DispatchViewSet(viewsets.ViewSet):
                 'errors': errors
             }
         })
+
+    @action(detail=False, methods=['get', 'post'], url_path='daily-routes')
+    def daily_routes(self, request):
+        """
+        GET: Предварительный просмотр распределения заказов на день.
+        POST: Применить распределение (auto_assign=True).
+        Query param: date=YYYY-MM-DD (по умолчанию — сегодня)
+        """
+        user = request.user
+        if not user.is_staff:
+            return Response({'error': 'Нет прав'}, status=status.HTTP_403_FORBIDDEN)
+
+        from datetime import date as date_cls, datetime as dt_cls
+        from .daily_routing import distribute_orders_for_day
+
+        date_str = request.query_params.get('date') or request.data.get('date')
+        if date_str:
+            try:
+                target_date = dt_cls.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'Неверный формат даты. Используйте YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            target_date = date_cls.today()
+
+        auto_assign = request.method == 'POST'
+        result = distribute_orders_for_day(target_date, auto_assign=auto_assign, user=user)
+        return Response(result)

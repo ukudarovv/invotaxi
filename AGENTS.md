@@ -26,3 +26,4 @@ Invo Taxi is a taxi dispatch application for a disability advocacy organization 
 - `npm run build` runs `vite build`. No dedicated lint or TypeScript check scripts are configured in the frontend.
 - Backend tests: `cd backend && source venv/bin/activate && python manage.py test`. Currently 0 tests defined.
 - The Flutter mobile app (`invo_taxi_app/`) requires Flutter SDK which is not available in the cloud VM. Skip it for cloud development.
+- **Maps**: The frontend uses **Yandex Maps API v2.1** (not Leaflet). The `ymaps` global is loaded via a `<script>` tag in `frontend/index.html`. TypeScript declarations are in `frontend/src/ymaps.d.ts`. Components use `ymaps.ready()` for initialization and `map.destroy()` for cleanup.

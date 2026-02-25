@@ -1,16 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 import { Region } from "../services/regions";
 import { MapPin, Loader2 } from "lucide-react";
 
-// Fix for default marker icon
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+declare const ymaps: typeof window.ymaps;
 
 interface RegionsMapViewProps {
   regions: Region[];
@@ -23,184 +15,129 @@ export function RegionsMapView({
   onRegionClick,
   defaultZoom = 10,
 }: RegionsMapViewProps) {
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<L.Marker[]>([]);
-  const circlesRef = useRef<L.Circle[]>([]);
-  const polygonsRef = useRef<L.Polygon[]>([]);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
   const [mapInitialized, setMapInitialized] = useState(false);
 
-  // Инициализация карты
   useEffect(() => {
     if (mapInstanceRef.current) return;
 
-    const initializeMap = () => {
-      if (!mapRef.current || mapInstanceRef.current) return;
+    const initMap = () => {
+      if (!mapContainerRef.current || mapInstanceRef.current) return;
 
-      // Рассчитываем центр карты
-      let centerLat = 47.10869114222083; // Атырау по умолчанию
+      let centerLat = 47.10869114222083;
       let centerLon = 51.9049072265625;
 
       if (regions.length > 0) {
-        const avgLat = regions.reduce((sum, r) => sum + r.center_lat, 0) / regions.length;
-        const avgLon = regions.reduce((sum, r) => sum + r.center_lon, 0) / regions.length;
-        centerLat = avgLat;
-        centerLon = avgLon;
+        centerLat = regions.reduce((sum, r) => sum + r.center_lat, 0) / regions.length;
+        centerLon = regions.reduce((sum, r) => sum + r.center_lon, 0) / regions.length;
       }
 
       try {
-        mapInstanceRef.current = L.map(mapRef.current).setView([centerLat, centerLon], defaultZoom);
+        mapInstanceRef.current = new ymaps.Map(mapContainerRef.current, {
+          center: [centerLat, centerLon],
+          zoom: defaultZoom,
+          controls: ['zoomControl', 'typeSelector'],
+        });
 
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-          maxZoom: 19,
-        }).addTo(mapInstanceRef.current);
-
-        // Устанавливаем флаг инициализации после небольшой задержки для гарантии готовности карты
-        setTimeout(() => {
-          setMapInitialized(true);
-        }, 200);
+        setTimeout(() => setMapInitialized(true), 200);
       } catch (error) {
         console.error('Ошибка инициализации карты:', error);
         setMapInitialized(true);
       }
     };
 
-    // Пробуем инициализировать сразу
-    if (mapRef.current) {
-      initializeMap();
+    if (mapContainerRef.current) {
+      ymaps.ready(initMap);
     } else {
-      // Если ref еще не готов, пробуем через небольшую задержку
-      const timer = setTimeout(() => {
-        initializeMap();
-      }, 100);
+      const timer = setTimeout(() => ymaps.ready(initMap), 100);
       return () => clearTimeout(timer);
     }
 
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        mapInstanceRef.current.destroy();
         mapInstanceRef.current = null;
         setMapInitialized(false);
       }
     };
-  }, []); // Только при монтировании
+  }, []);
 
-  // Обновление центра карты при изменении регионов
   useEffect(() => {
-    if (!mapInstanceRef.current || !mapInitialized || regions.length === 0) return;
+    const map = mapInstanceRef.current;
+    if (!map || !mapInitialized || regions.length === 0) return;
 
-    // Обновляем центр карты на среднее значение координат регионов
     const avgLat = regions.reduce((sum, r) => sum + r.center_lat, 0) / regions.length;
     const avgLon = regions.reduce((sum, r) => sum + r.center_lon, 0) / regions.length;
-    mapInstanceRef.current.setView([avgLat, avgLon], defaultZoom);
+    map.setCenter([avgLat, avgLon], defaultZoom);
   }, [regions.length, mapInitialized, defaultZoom]);
 
-  // Обновление маркеров, кругов и полигонов при изменении регионов
   useEffect(() => {
-    if (!mapInstanceRef.current || !mapInitialized) return;
+    const map = mapInstanceRef.current;
+    if (!map || !mapInitialized) return;
 
-    // Удаляем старые элементы
-    markersRef.current.forEach((marker) => {
-      mapInstanceRef.current?.removeLayer(marker);
-    });
-    circlesRef.current.forEach((circle) => {
-      mapInstanceRef.current?.removeLayer(circle);
-    });
-    polygonsRef.current.forEach((polygon) => {
-      mapInstanceRef.current?.removeLayer(polygon);
-    });
-    markersRef.current = [];
-    circlesRef.current = [];
-    polygonsRef.current = [];
+    map.geoObjects.removeAll();
 
-    // Создаем новые элементы для каждого региона
     regions.forEach((region) => {
-      if (!mapInstanceRef.current) return;
+      const coords: [number, number] = [region.center_lat, region.center_lon];
 
-      const position: [number, number] = [region.center_lat, region.center_lon];
-
-      // Создаем маркер для центра региона
-      const marker = L.marker(position, {
-        icon: L.icon({
-          iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-          iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-          shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-          iconSize: [25, 41],
-          iconAnchor: [12, 41],
-          popupAnchor: [1, -34],
-          shadowSize: [41, 41],
-        }),
-      }).addTo(mapInstanceRef.current);
-
-      // Создаем popup с информацией о регионе
       const popupContent = `
-        <div style="min-width: 200px;">
-          <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">${region.title}</h3>
-          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Город: ${region.city.title}</p>
-          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${region.id}</p>
-          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
+        <div style="min-width:200px;">
+          <h3 style="margin:0 0 8px;font-weight:600;color:#1f2937;">${region.title}</h3>
+          <p style="margin:4px 0;font-size:12px;color:#6b7280;">Город: ${region.city.title}</p>
+          <p style="margin:4px 0;font-size:12px;color:#6b7280;">ID: ${region.id}</p>
+          <p style="margin:4px 0;font-size:12px;color:#6b7280;">
             Координаты: ${region.center_lat.toFixed(4)}, ${region.center_lon.toFixed(4)}
           </p>
-          ${region.service_radius_meters ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Радиус: ${region.service_radius_meters} м</p>` : ''}
-          ${region.polygon_coordinates && region.polygon_coordinates.length > 0 ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Полигон: ${region.polygon_coordinates.length} точек</p>` : ''}
-        </div>
-      `;
+          ${region.service_radius_meters ? `<p style="margin:4px 0;font-size:12px;color:#6b7280;">Радиус: ${region.service_radius_meters} м</p>` : ''}
+          ${region.polygon_coordinates && region.polygon_coordinates.length > 0 ? `<p style="margin:4px 0;font-size:12px;color:#6b7280;">Полигон: ${region.polygon_coordinates.length} точек</p>` : ''}
+        </div>`;
 
-      marker.bindPopup(popupContent);
+      const placemark = new ymaps.Placemark(
+        coords,
+        { balloonContent: popupContent },
+        { preset: 'islands#blueCircleDotIcon' }
+      );
 
-      // Обработчик клика на маркер
-      marker.on("click", () => {
-        if (onRegionClick) {
-          onRegionClick(region);
-        }
+      placemark.events.add('click', () => {
+        if (onRegionClick) onRegionClick(region);
       });
 
-      markersRef.current.push(marker);
+      map.geoObjects.add(placemark);
 
-      // Создаем полигон, если он задан
       if (region.polygon_coordinates && region.polygon_coordinates.length >= 3) {
-        const latlngs = region.polygon_coordinates.map(
-          (p) => [p[0], p[1]] as [number, number]
-        );
-        const polygon = L.polygon(latlngs, {
-          color: "#3b82f6",
-          fillColor: "#3b82f6",
-          fillOpacity: 0.2,
-          weight: 2,
-        }).addTo(mapInstanceRef.current);
-
-        polygon.bindPopup(popupContent);
-        polygon.on("click", () => {
-          if (onRegionClick) {
-            onRegionClick(region);
+        const ring = region.polygon_coordinates.map((p) => [p[0], p[1]]);
+        const polygon = new ymaps.Polygon(
+          [ring],
+          { balloonContent: popupContent },
+          {
+            fillColor: '#3b82f633',
+            strokeColor: '#3b82f6',
+            strokeWidth: 2,
           }
+        );
+
+        polygon.events.add('click', () => {
+          if (onRegionClick) onRegionClick(region);
         });
 
-        polygonsRef.current.push(polygon);
-      }
+        map.geoObjects.add(polygon);
+      } else if (region.service_radius_meters && region.service_radius_meters > 0) {
+        const circle = new ymaps.Circle(
+          [coords, region.service_radius_meters],
+          { balloonContent: popupContent },
+          {
+            fillColor: '#3b82f633',
+            strokeColor: '#3b82f6',
+            strokeWidth: 2,
+          }
+        );
 
-      // Создаем круг радиуса обслуживания, если он задан и нет полигона
-      if (region.service_radius_meters && region.service_radius_meters > 0) {
-        // Показываем круг только если нет полигона
-        if (!region.polygon_coordinates || region.polygon_coordinates.length < 3) {
-          const circle = L.circle(position, {
-            radius: region.service_radius_meters,
-            color: "#3b82f6",
-            fillColor: "#3b82f6",
-            fillOpacity: 0.2,
-            weight: 2,
-          }).addTo(mapInstanceRef.current);
+        circle.events.add('click', () => {
+          if (onRegionClick) onRegionClick(region);
+        });
 
-          circle.bindPopup(popupContent);
-          circle.on("click", () => {
-            if (onRegionClick) {
-              onRegionClick(region);
-            }
-          });
-
-          circlesRef.current.push(circle);
-        }
+        map.geoObjects.add(circle);
       }
     });
   }, [regions, onRegionClick, mapInitialized]);
@@ -249,7 +186,7 @@ export function RegionsMapView({
               </div>
             </div>
           )}
-          <div ref={mapRef} className="w-full h-full rounded-lg" />
+          <div ref={mapContainerRef} className="w-full h-full rounded-lg" />
         </div>
         {regions.length > 0 && (
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">

@@ -1,58 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { MapPin, Users, Navigation, Filter, Car, Loader2, Wifi, WifiOff, AlertCircle } from "lucide-react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
 import { dispatchApi, DriverMarker, OrderMarker } from "../services/dispatch";
 import { getDispatchMapWebSocket, testWebSocketConnection } from "../services/websocket";
 import { regionsApi, City } from "../services/regions";
 
-// Fix для иконок Leaflet
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
-
-// Создаем кастомные иконки
-const createDriverIcon = (isOnline: boolean) => {
-  return L.divIcon({
-    className: "custom-driver-icon",
-    html: `<div class="w-10 h-10 rounded-full flex items-center justify-center shadow-lg ${
-      isOnline ? "bg-green-500" : "bg-gray-400"
-    }">
-      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-      </svg>
-    </div>`,
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
-  });
-};
-
-const createOrderIcon = (color: string = "blue") => {
-  return L.divIcon({
-    className: "custom-order-icon",
-    html: `<div class="w-8 h-8 rounded-full flex items-center justify-center shadow-lg bg-${color}-500">
-      <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    </div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-  });
-};
-
-// Компонент для обновления карты при изменении центра
-function MapUpdater({ center }: { center: [number, number] }) {
-  const map = useMap();
-  useEffect(() => {
-    map.setView(center, map.getZoom());
-  }, [center, map]);
-  return null;
-}
+declare const ymaps: typeof window.ymaps;
 
 export function Map() {
   const [drivers, setDrivers] = useState<DriverMarker[]>([]);
@@ -67,13 +19,15 @@ export function Map() {
   const [wsReconnectAttempts, setWsReconnectAttempts] = useState(0);
   const wsRef = useRef<ReturnType<typeof getDispatchMapWebSocket> | null>(null);
 
-  // Загрузка городов
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const [mapReady, setMapReady] = useState(false);
+
   useEffect(() => {
     const loadCities = async () => {
       try {
         const citiesData = await regionsApi.getCities();
         setCities(citiesData);
-        // Устанавливаем первый город по умолчанию, если есть
         if (citiesData.length > 0 && selectedCityId === "all") {
           setSelectedCityId(citiesData[0].id);
         }
@@ -84,13 +38,11 @@ export function Map() {
     loadCities();
   }, []);
 
-  // Определяем центр карты на основе выбранного города
   const selectedCity = cities.find(c => c.id === selectedCityId);
   const center: [number, number] = selectedCity
     ? [selectedCity.center_lat, selectedCity.center_lon]
-    : [47.1067, 51.9167]; // Атырау по умолчанию
+    : [47.1067, 51.9167];
 
-  // Загрузка начальных данных
   useEffect(() => {
     const loadMapData = async () => {
       try {
@@ -108,42 +60,31 @@ export function Map() {
     loadMapData();
   }, []);
 
-  // Тестирование WebSocket подключения
   useEffect(() => {
     const testConnection = async () => {
       console.log('[Map] Testing WebSocket connection to ws://localhost:8000/ws/test/...');
-      console.log('[Map] This will help diagnose if WebSocket is working at all');
       const testResult = await testWebSocketConnection();
       if (testResult) {
-        console.log('[Map] ✅ Test WebSocket connection successful - WebSocket is working!');
-        console.log('[Map] The problem is likely with authentication or authorization');
+        console.log('[Map] Test WebSocket connection successful');
       } else {
-        console.error('[Map] ❌ Test WebSocket connection failed');
-        console.error('[Map] This means WebSocket is not working at all');
-        console.error('[Map] Check server logs for messages starting with [ASGI]');
-        console.error('[Map] If you see "Protocol type: http" instead of "websocket", the server is not recognizing WebSocket upgrade');
+        console.error('[Map] Test WebSocket connection failed');
       }
     };
-    // Задержка перед тестом, чтобы дать время загрузиться
     setTimeout(testConnection, 1000);
   }, []);
 
-  // Подключение к WebSocket
   useEffect(() => {
     const ws = getDispatchMapWebSocket();
     wsRef.current = ws;
-    
-    // Обновляем статус подключения
+
     const updateStatus = () => {
       setWsStatus(ws.getConnectionStatus());
       setWsReconnectAttempts(ws.getReconnectAttempts());
     };
-    
-    // Обновляем статус при изменении
-    const statusInterval = setInterval(updateStatus, 1000);
-    updateStatus(); // Первоначальное обновление
 
-    // Регистрируем обработчики
+    const statusInterval = setInterval(updateStatus, 1000);
+    updateStatus();
+
     ws.on("driver_location_update", (data: any) => {
       setDrivers((prev) => {
         const index = prev.findIndex((d) => d.id === data.driver_id);
@@ -152,7 +93,6 @@ export function Map() {
           updated[index] = { ...updated[index], lat: data.lat, lon: data.lon };
           return updated;
         }
-        // Если водителя нет в списке, добавляем его
         return [...prev, {
           id: data.driver_id,
           name: data.name || "",
@@ -189,8 +129,7 @@ export function Map() {
           };
           return updated;
         }
-        // Если заказа нет, добавляем его (только если активный)
-        const activeStatuses = ['submitted', 'awaiting_dispatcher_decision', 'active_queue', 
+        const activeStatuses = ['submitted', 'awaiting_dispatcher_decision', 'active_queue',
           'assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'];
         if (activeStatuses.includes(data.status)) {
           return [...prev, {
@@ -215,7 +154,7 @@ export function Map() {
     });
 
     ws.on("order_created", (data: any) => {
-      const activeStatuses = ['submitted', 'awaiting_dispatcher_decision', 'active_queue', 
+      const activeStatuses = ['submitted', 'awaiting_dispatcher_decision', 'active_queue',
         'assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'];
       if (activeStatuses.includes(data.status)) {
         setOrders((prev) => [...prev, {
@@ -237,22 +176,129 @@ export function Map() {
       }
     });
 
-    // Подключаемся
     ws.connect().catch((error) => {
       console.error("WebSocket connection error:", error);
     });
 
-    // Отключаемся при размонтировании
     return () => {
       clearInterval(statusInterval);
       ws.disconnect();
     };
   }, []);
 
+  // Initialize Yandex Map
+  useEffect(() => {
+    if (loading) return;
+
+    const initMap = () => {
+      if (!mapContainerRef.current || mapInstanceRef.current) return;
+
+      mapInstanceRef.current = new ymaps.Map(mapContainerRef.current, {
+        center: center,
+        zoom: 12,
+        controls: ['zoomControl', 'typeSelector'],
+      });
+
+      setMapReady(true);
+    };
+
+    ymaps.ready(initMap);
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+        setMapReady(false);
+      }
+    };
+  }, [loading]);
+
+  // Update map center when city changes
+  useEffect(() => {
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setCenter(center, mapInstanceRef.current.getZoom());
+    }
+  }, [center]);
+
   const filteredDrivers = drivers.filter((driver) => {
     const matchesOnline = !showOnlineOnly || driver.is_online;
     return matchesOnline;
   });
+
+  // Update placemarks whenever data or filters change
+  const updatePlacemarks = useCallback(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    map.geoObjects.removeAll();
+
+    filteredDrivers.forEach((driver) => {
+      const placemark = new ymaps.Placemark(
+        [driver.lat, driver.lon],
+        {
+          balloonContent: `
+            <div style="padding:8px;">
+              <p style="font-weight:600;font-size:14px;margin:0 0 4px;">${driver.name}</p>
+              <p style="font-size:12px;color:#6b7280;margin:2px 0;">${driver.car_model}</p>
+              <p style="font-size:12px;color:#6b7280;margin:2px 0;">${driver.plate_number}</p>
+              <p style="font-size:12px;margin:4px 0 0;">
+                <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${driver.is_online ? '#22c55e' : '#9ca3af'};margin-right:4px;vertical-align:middle;"></span>
+                ${driver.is_online ? 'Онлайн' : 'Оффлайн'}
+              </p>
+            </div>`,
+        },
+        {
+          preset: driver.is_online ? 'islands#greenCircleIcon' : 'islands#grayCircleIcon',
+        }
+      );
+      placemark.events.add('click', () => setSelectedDriver(driver));
+      map.geoObjects.add(placemark);
+    });
+
+    orders.forEach((order) => {
+      if (order.pickup_lat && order.pickup_lon) {
+        const pickup = new ymaps.Placemark(
+          [order.pickup_lat, order.pickup_lon],
+          {
+            balloonContent: `
+              <div style="padding:8px;">
+                <p style="font-weight:600;font-size:14px;margin:0 0 4px;">Заказ ${order.id}</p>
+                <p style="font-size:12px;color:#6b7280;margin:2px 0;">От: ${order.pickup_title}</p>
+                <p style="font-size:12px;color:#6b7280;margin:2px 0;">До: ${order.dropoff_title}</p>
+                ${order.passenger ? `<p style="font-size:12px;color:#6b7280;margin:2px 0;">Пассажир: ${order.passenger.full_name}</p>` : ''}
+                <span style="display:inline-block;margin-top:6px;padding:2px 8px;background:#dbeafe;color:#1e40af;border-radius:4px;font-size:12px;">${order.status}</span>
+              </div>`,
+          },
+          { preset: 'islands#greenDotIcon' }
+        );
+        pickup.events.add('click', () => setSelectedOrder(order));
+        map.geoObjects.add(pickup);
+      }
+
+      if (order.dropoff_lat && order.dropoff_lon) {
+        const dropoff = new ymaps.Placemark(
+          [order.dropoff_lat, order.dropoff_lon],
+          {
+            balloonContent: `
+              <div style="padding:8px;">
+                <p style="font-weight:600;font-size:14px;margin:0 0 4px;">Заказ ${order.id}</p>
+                <p style="font-size:12px;color:#6b7280;margin:2px 0;">Назначение: ${order.dropoff_title}</p>
+                <span style="display:inline-block;margin-top:6px;padding:2px 8px;background:#dbeafe;color:#1e40af;border-radius:4px;font-size:12px;">${order.status}</span>
+              </div>`,
+          },
+          { preset: 'islands#redDotIcon' }
+        );
+        dropoff.events.add('click', () => setSelectedOrder(order));
+        map.geoObjects.add(dropoff);
+      }
+    });
+  }, [filteredDrivers, orders]);
+
+  useEffect(() => {
+    if (mapReady) {
+      updatePlacemarks();
+    }
+  }, [mapReady, updatePlacemarks]);
 
   const onlineCount = filteredDrivers.filter((d) => d.is_online).length;
   const offlineCount = filteredDrivers.filter((d) => !d.is_online).length;
@@ -384,100 +430,16 @@ export function Map() {
             <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
           </div>
         ) : (
-          <MapContainer
-            center={center}
-            zoom={12}
+          <div
+            ref={mapContainerRef}
             style={{ height: "calc(100vh - 400px)", minHeight: "500px", width: "100%" }}
-            className="z-0"
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            <MapUpdater center={center} />
-
-            {/* Driver Markers */}
-            {filteredDrivers.map((driver) => (
-              <Marker
-                key={driver.id}
-                position={[driver.lat, driver.lon]}
-                icon={createDriverIcon(driver.is_online)}
-                eventHandlers={{
-                  click: () => setSelectedDriver(driver),
-                }}
-              >
-                <Popup>
-                  <div className="p-2">
-                    <p className="font-semibold text-sm">{driver.name}</p>
-                    <p className="text-xs text-gray-500">{driver.car_model}</p>
-                    <p className="text-xs text-gray-500">{driver.plate_number}</p>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className={`w-2 h-2 rounded-full ${driver.is_online ? "bg-green-500" : "bg-gray-400"}`}></span>
-                      <span className="text-xs">{driver.is_online ? "Онлайн" : "Оффлайн"}</span>
-                    </div>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-
-            {/* Order Markers - Pickup */}
-            {orders
-              .filter((order) => order.pickup_lat && order.pickup_lon)
-              .map((order) => (
-                <Marker
-                  key={`order-${order.id}-pickup`}
-                  position={[order.pickup_lat!, order.pickup_lon!]}
-                  icon={createOrderIcon("green")}
-                  eventHandlers={{
-                    click: () => setSelectedOrder(order),
-                  }}
-                >
-                  <Popup>
-                    <div className="p-2">
-                      <p className="font-semibold text-sm">Заказ {order.id}</p>
-                      <p className="text-xs text-gray-500 mt-1">От: {order.pickup_title}</p>
-                      <p className="text-xs text-gray-500">До: {order.dropoff_title}</p>
-                      {order.passenger && (
-                        <p className="text-xs text-gray-500">Пассажир: {order.passenger.full_name}</p>
-                      )}
-                      <span className="inline-block mt-2 px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">
-                        {order.status}
-                      </span>
-                    </div>
-                  </Popup>
-                </Marker>
-              ))}
-
-            {/* Order Markers - Dropoff */}
-            {orders
-              .filter((order) => order.dropoff_lat && order.dropoff_lon)
-              .map((order) => (
-                <Marker
-                  key={`order-${order.id}-dropoff`}
-                  position={[order.dropoff_lat!, order.dropoff_lon!]}
-                  icon={createOrderIcon("red")}
-                  eventHandlers={{
-                    click: () => setSelectedOrder(order),
-                  }}
-                >
-                  <Popup>
-                    <div className="p-2">
-                      <p className="font-semibold text-sm">Заказ {order.id}</p>
-                      <p className="text-xs text-gray-500 mt-1">Назначение: {order.dropoff_title}</p>
-                      <span className="inline-block mt-2 px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">
-                        {order.status}
-                      </span>
-                    </div>
-                  </Popup>
-                </Marker>
-              ))}
-          </MapContainer>
+          />
         )}
 
         {/* Legend */}
-        <div className="absolute top-4 left-4 bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 border border-gray-200 dark:border-gray-700 z-[1000]">
+        <div className="bg-white dark:bg-gray-800 p-4 border-t border-gray-200 dark:border-gray-700">
           <p className="text-sm font-semibold dark:text-white mb-2">Легенда</p>
-          <div className="space-y-2">
+          <div className="flex flex-wrap gap-4">
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 rounded-full bg-green-500"></div>
               <span className="text-xs dark:text-gray-300">Водитель онлайн</span>

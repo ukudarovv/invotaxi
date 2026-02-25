@@ -1,7 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Region } from "../services/regions";
-
-declare const ymaps: typeof window.ymaps;
 
 interface RegionsMapProps {
   regions: Region[];
@@ -18,110 +16,75 @@ export function RegionsMap({
   defaultZoom = 10,
   serviceRadius = 10000,
 }: RegionsMapProps) {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const geoObjectsRef = useRef<any[]>([]);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => { ymaps.ready(() => setReady(true)); }, []);
 
   useEffect(() => {
-    if (!mapContainerRef.current || mapInstanceRef.current) return;
+    if (!ready || mapInstanceRef.current) return;
+    if (!mapRef.current) return;
 
     let centerLat = 43.238949;
     let centerLon = 76.945833;
-
     if (regions.length > 0) {
       centerLat = regions.reduce((sum, r) => sum + r.center_lat, 0) / regions.length;
       centerLon = regions.reduce((sum, r) => sum + r.center_lon, 0) / regions.length;
     }
 
-    const init = () => {
-      if (!mapContainerRef.current || mapInstanceRef.current) return;
-
-      mapInstanceRef.current = new ymaps.Map(mapContainerRef.current, {
-        center: [centerLat, centerLon],
-        zoom: defaultZoom,
-        controls: ['zoomControl', 'typeSelector'],
-      });
-    };
-
-    ymaps.ready(init);
+    mapInstanceRef.current = new ymaps.Map(mapRef.current, {
+      center: [centerLat, centerLon],
+      zoom: defaultZoom,
+      controls: ["zoomControl"],
+    });
 
     return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.destroy();
-        mapInstanceRef.current = null;
-      }
+      if (mapInstanceRef.current) { mapInstanceRef.current.destroy(); mapInstanceRef.current = null; }
     };
-  }, []);
+  }, [ready]);
 
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
-    map.geoObjects.removeAll();
+    if (!mapInstanceRef.current) return;
+    geoObjectsRef.current.forEach((obj) => mapInstanceRef.current!.geoObjects.remove(obj));
+    geoObjectsRef.current = [];
 
     regions.forEach((region) => {
-      const coords: [number, number] = [region.center_lat, region.center_lon];
+      if (!mapInstanceRef.current) return;
+      const position = [region.center_lat, region.center_lon];
+      const popupContent = `<div><h3 style="margin:0 0 8px 0;font-weight:600;">${region.title}</h3>${region.city ? `<p style="font-size:12px;color:#6b7280;">Город: ${region.city.title}</p>` : ""}<p style="font-size:12px;color:#6b7280;">ID: ${region.id}</p><p style="font-size:12px;color:#6b7280;">Координаты: ${region.center_lat.toFixed(4)}, ${region.center_lon.toFixed(4)}</p></div>`;
 
-      const popupContent = `
-        <div style="min-width:150px;">
-          <h3 style="margin:0 0 8px;font-weight:600;color:#1f2937;">${region.title}</h3>
-          ${region.city ? `<p style="margin:4px 0;font-size:12px;color:#6b7280;">Город: ${region.city.title}</p>` : ''}
-          <p style="margin:4px 0;font-size:12px;color:#6b7280;">ID: ${region.id}</p>
-          <p style="margin:4px 0;font-size:12px;color:#6b7280;">
-            Координаты: ${region.center_lat.toFixed(4)}, ${region.center_lon.toFixed(4)}
-          </p>
-        </div>`;
-
-      const placemark = new ymaps.Placemark(
-        coords,
-        { balloonContent: popupContent },
-        { preset: 'islands#blueCircleDotIcon' }
-      );
-
-      placemark.events.add('click', () => {
-        if (onRegionSelect) {
-          onRegionSelect(region.id);
-        }
-      });
-
-      map.geoObjects.add(placemark);
+      const marker = new ymaps.Placemark(position, { balloonContent: popupContent }, { preset: "islands#blueCircleDotIcon" });
+      marker.events.add("click", () => onRegionSelect?.(region.id));
+      mapInstanceRef.current.geoObjects.add(marker);
+      geoObjectsRef.current.push(marker);
 
       const circle = new ymaps.Circle(
-        [coords, serviceRadius],
+        [position, serviceRadius],
         {},
-        {
-          fillColor: '#3b82f633',
-          strokeColor: '#3b82f6',
-          strokeWidth: 2,
-        }
+        { fillColor: "rgba(59,130,246,0.2)", strokeColor: "#3b82f6", strokeWidth: 2 }
       );
-
-      map.geoObjects.add(circle);
+      mapInstanceRef.current.geoObjects.add(circle);
+      geoObjectsRef.current.push(circle);
     });
   }, [regions, serviceRadius, onRegionSelect]);
 
   useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !selectedRegionId) return;
-
+    if (!mapInstanceRef.current || !selectedRegionId) return;
     const selectedRegion = regions.find((r) => r.id === selectedRegionId);
     if (selectedRegion) {
-      map.setCenter(
-        [selectedRegion.center_lat, selectedRegion.center_lon],
-        defaultZoom + 2,
-        { duration: 500 }
-      );
+      mapInstanceRef.current.setCenter([selectedRegion.center_lat, selectedRegion.center_lon], defaultZoom + 2);
     }
   }, [selectedRegionId, regions, defaultZoom]);
 
   if (regions.length === 0) {
     return (
       <div className="w-full h-full rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center">
-        <div className="text-center text-gray-500 dark:text-gray-400">
-          <p>Нет регионов для отображения</p>
-        </div>
+        <div className="text-center text-gray-500 dark:text-gray-400"><p>Нет регионов для отображения</p></div>
       </div>
     );
   }
 
-  return <div ref={mapContainerRef} className="w-full h-full rounded-lg" />;
+  return <div ref={mapRef} className="w-full h-full rounded-lg" />;
 }

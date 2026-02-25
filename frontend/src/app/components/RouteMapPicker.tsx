@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 
-declare global {
-  interface Window {
-    ymaps: any;
-  }
-}
-
 interface RouteMapPickerProps {
   initialLat?: number;
   initialLon?: number;
@@ -29,13 +23,11 @@ export function RouteMapPicker({
   initialDropoff,
   selectionMode = "both",
 }: RouteMapPickerProps) {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const pickupMarkerRef = useRef<any>(null);
-  const dropoffMarkerRef = useRef<any>(null);
-  const routeLineRef = useRef<any>(null);
-  const ymapsReadyRef = useRef(false);
-
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const pickupMarkerRef = useRef<ymaps.Placemark | null>(null);
+  const dropoffMarkerRef = useRef<ymaps.Placemark | null>(null);
+  const routeLineRef = useRef<ymaps.Polyline | null>(null);
   const [pickupCoords, setPickupCoords] = useState<{ lat: number; lon: number } | null>(
     initialPickup ? { lat: initialPickup.lat, lon: initialPickup.lon } : null
   );
@@ -43,247 +35,174 @@ export function RouteMapPicker({
     initialDropoff ? { lat: initialDropoff.lat, lon: initialDropoff.lon } : null
   );
   const [currentMode, setCurrentMode] = useState<"pickup" | "dropoff">("pickup");
-
-  const [pickupQuery, setPickupQuery] = useState(initialPickup?.address ?? "");
-  const [dropoffQuery, setDropoffQuery] = useState(initialDropoff?.address ?? "");
-  const [pickupSuggestions, setPickupSuggestions] = useState<any[]>([]);
-  const [dropoffSuggestions, setDropoffSuggestions] = useState<any[]>([]);
-  const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
-  const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [pickupSearch, setPickupSearch] = useState("");
+  const [dropoffSearch, setDropoffSearch] = useState("");
 
   const pickupCoordsRef = useRef(pickupCoords);
   const dropoffCoordsRef = useRef(dropoffCoords);
   const currentModeRef = useRef(currentMode);
 
-  useEffect(() => {
-    pickupCoordsRef.current = pickupCoords;
-  }, [pickupCoords]);
+  useEffect(() => { pickupCoordsRef.current = pickupCoords; }, [pickupCoords]);
+  useEffect(() => { dropoffCoordsRef.current = dropoffCoords; }, [dropoffCoords]);
+  useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
 
-  useEffect(() => {
-    dropoffCoordsRef.current = dropoffCoords;
-  }, [dropoffCoords]);
-
-  useEffect(() => {
-    currentModeRef.current = currentMode;
-  }, [currentMode]);
+  useEffect(() => { ymaps.ready(() => setReady(true)); }, []);
 
   const updateRoute = useCallback(() => {
-    const map = mapInstanceRef.current;
-    if (!map) return;
-
+    if (!mapInstanceRef.current) return;
     if (routeLineRef.current) {
-      map.geoObjects.remove(routeLineRef.current);
+      mapInstanceRef.current.geoObjects.remove(routeLineRef.current);
       routeLineRef.current = null;
     }
-
     const pickup = pickupCoordsRef.current;
     const dropoff = dropoffCoordsRef.current;
     if (pickup && dropoff) {
-      const ymaps = window.ymaps;
       routeLineRef.current = new ymaps.Polyline(
-        [
-          [pickup.lat, pickup.lon],
-          [dropoff.lat, dropoff.lon],
-        ],
+        [[pickup.lat, pickup.lon], [dropoff.lat, dropoff.lon]],
         {},
-        {
-          strokeColor: "#3b82f6",
-          strokeWidth: 4,
-          strokeOpacity: 0.7,
-          strokeStyle: "dash",
-        }
+        { strokeColor: "#3b82f6", strokeWidth: 4, strokeStyle: "dash", opacity: 0.7 }
       );
-      map.geoObjects.add(routeLineRef.current);
+      mapInstanceRef.current.geoObjects.add(routeLineRef.current);
     }
   }, []);
 
-  const addPickupMarker = useCallback(
-    (lat: number, lon: number, address?: string) => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
-      const ymaps = window.ymaps;
+  const addPickupMarker = useCallback((lat: number, lon: number) => {
+    if (!mapInstanceRef.current) return;
+    if (pickupMarkerRef.current) {
+      mapInstanceRef.current.geoObjects.remove(pickupMarkerRef.current);
+    }
+    pickupMarkerRef.current = new ymaps.Placemark(
+      [lat, lon],
+      { iconCaption: "A - Откуда" },
+      { preset: "islands#greenDotIcon", draggable: true }
+    );
+    pickupMarkerRef.current.events.add("dragend", () => {
+      const coords = pickupMarkerRef.current!.geometry.getCoordinates();
+      const newCoords = { lat: coords[0], lon: coords[1] };
+      setPickupCoords(newCoords);
+      pickupCoordsRef.current = newCoords;
+      onPickupChange?.(coords[0], coords[1]);
+      updateRoute();
+    });
+    mapInstanceRef.current.geoObjects.add(pickupMarkerRef.current);
+    onPickupChange?.(lat, lon);
+  }, [onPickupChange, updateRoute]);
 
-      if (pickupMarkerRef.current) {
-        map.geoObjects.remove(pickupMarkerRef.current);
-      }
+  const updatePickupMarker = useCallback((lat: number, lon: number) => {
+    if (!mapInstanceRef.current) return;
+    if (pickupMarkerRef.current) {
+      pickupMarkerRef.current.geometry.setCoordinates([lat, lon]);
+    } else {
+      addPickupMarker(lat, lon);
+    }
+    onPickupChange?.(lat, lon);
+  }, [addPickupMarker, onPickupChange]);
 
-      pickupMarkerRef.current = new ymaps.Placemark(
-        [lat, lon],
-        { iconContent: "A" },
-        { preset: "islands#greenDotIcon", draggable: true }
-      );
+  const addDropoffMarker = useCallback((lat: number, lon: number) => {
+    if (!mapInstanceRef.current) return;
+    if (dropoffMarkerRef.current) {
+      mapInstanceRef.current.geoObjects.remove(dropoffMarkerRef.current);
+    }
+    dropoffMarkerRef.current = new ymaps.Placemark(
+      [lat, lon],
+      { iconCaption: "B - Куда" },
+      { preset: "islands#redDotIcon", draggable: true }
+    );
+    dropoffMarkerRef.current.events.add("dragend", () => {
+      const coords = dropoffMarkerRef.current!.geometry.getCoordinates();
+      const newCoords = { lat: coords[0], lon: coords[1] };
+      setDropoffCoords(newCoords);
+      dropoffCoordsRef.current = newCoords;
+      onDropoffChange?.(coords[0], coords[1]);
+      updateRoute();
+    });
+    mapInstanceRef.current.geoObjects.add(dropoffMarkerRef.current);
+    onDropoffChange?.(lat, lon);
+  }, [onDropoffChange, updateRoute]);
 
-      pickupMarkerRef.current.events.add("dragend", () => {
-        const coords = pickupMarkerRef.current.geometry.getCoordinates();
-        const newCoords = { lat: coords[0], lon: coords[1] };
-        setPickupCoords(newCoords);
-        pickupCoordsRef.current = newCoords;
-        onPickupChange?.(coords[0], coords[1]);
-        updateRoute();
-      });
+  const updateDropoffMarker = useCallback((lat: number, lon: number) => {
+    if (!mapInstanceRef.current) return;
+    if (dropoffMarkerRef.current) {
+      dropoffMarkerRef.current.geometry.setCoordinates([lat, lon]);
+    } else {
+      addDropoffMarker(lat, lon);
+    }
+    onDropoffChange?.(lat, lon);
+  }, [addDropoffMarker, onDropoffChange]);
 
-      map.geoObjects.add(pickupMarkerRef.current);
-      onPickupChange?.(lat, lon, address);
-    },
-    [onPickupChange, updateRoute]
-  );
-
-  const updatePickupMarker = useCallback(
-    (lat: number, lon: number, address?: string) => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
-
-      if (pickupMarkerRef.current) {
-        pickupMarkerRef.current.geometry.setCoordinates([lat, lon]);
-      } else {
-        addPickupMarker(lat, lon, address);
-      }
-      onPickupChange?.(lat, lon, address);
-    },
-    [addPickupMarker, onPickupChange]
-  );
-
-  const addDropoffMarker = useCallback(
-    (lat: number, lon: number, address?: string) => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
-      const ymaps = window.ymaps;
-
-      if (dropoffMarkerRef.current) {
-        map.geoObjects.remove(dropoffMarkerRef.current);
-      }
-
-      dropoffMarkerRef.current = new ymaps.Placemark(
-        [lat, lon],
-        { iconContent: "B" },
-        { preset: "islands#redDotIcon", draggable: true }
-      );
-
-      dropoffMarkerRef.current.events.add("dragend", () => {
-        const coords = dropoffMarkerRef.current.geometry.getCoordinates();
-        const newCoords = { lat: coords[0], lon: coords[1] };
-        setDropoffCoords(newCoords);
-        dropoffCoordsRef.current = newCoords;
-        onDropoffChange?.(coords[0], coords[1]);
-        updateRoute();
-      });
-
-      map.geoObjects.add(dropoffMarkerRef.current);
-      onDropoffChange?.(lat, lon, address);
-    },
-    [onDropoffChange, updateRoute]
-  );
-
-  const updateDropoffMarker = useCallback(
-    (lat: number, lon: number, address?: string) => {
-      const map = mapInstanceRef.current;
-      if (!map) return;
-
-      if (dropoffMarkerRef.current) {
-        dropoffMarkerRef.current.geometry.setCoordinates([lat, lon]);
-      } else {
-        addDropoffMarker(lat, lon, address);
-      }
-      onDropoffChange?.(lat, lon, address);
-    },
-    [addDropoffMarker, onDropoffChange]
-  );
-
-  // Initialize map
   useEffect(() => {
-    if (!mapContainerRef.current || mapInstanceRef.current) return;
+    if (!ready || !mapRef.current || mapInstanceRef.current) return;
 
-    const ymaps = window.ymaps;
-    if (!ymaps) return;
+    let centerLat = initialLat;
+    let centerLon = initialLon;
+    if (pickupCoords) { centerLat = pickupCoords.lat; centerLon = pickupCoords.lon; }
+    else if (dropoffCoords) { centerLat = dropoffCoords.lat; centerLon = dropoffCoords.lon; }
 
-    ymaps.ready(() => {
-      if (!mapContainerRef.current || mapInstanceRef.current) return;
-      ymapsReadyRef.current = true;
+    mapInstanceRef.current = new ymaps.Map(mapRef.current, {
+      center: [centerLat, centerLon],
+      zoom: initialZoom,
+      controls: ["zoomControl"],
+    });
 
-      let centerLat = initialLat;
-      let centerLon = initialLon;
+    if (pickupCoords) addPickupMarker(pickupCoords.lat, pickupCoords.lon);
+    if (dropoffCoords) addDropoffMarker(dropoffCoords.lat, dropoffCoords.lon);
 
-      if (pickupCoordsRef.current) {
-        centerLat = pickupCoordsRef.current.lat;
-        centerLon = pickupCoordsRef.current.lon;
-      } else if (dropoffCoordsRef.current) {
-        centerLat = dropoffCoordsRef.current.lat;
-        centerLon = dropoffCoordsRef.current.lon;
-      }
+    mapInstanceRef.current.events.add("click", (e: any) => {
+      const coords = e.get("coords");
+      const lat = coords[0];
+      const lon = coords[1];
+      const currentPickup = pickupCoordsRef.current;
+      const currentDropoff = dropoffCoordsRef.current;
+      const mode = currentModeRef.current;
 
-      mapInstanceRef.current = new ymaps.Map(mapContainerRef.current, {
-        center: [centerLat, centerLon],
-        zoom: initialZoom,
-        controls: ["zoomControl", "geolocationControl"],
-      });
-
-      if (pickupCoordsRef.current) {
-        addPickupMarker(pickupCoordsRef.current.lat, pickupCoordsRef.current.lon);
-      }
-      if (dropoffCoordsRef.current) {
-        addDropoffMarker(dropoffCoordsRef.current.lat, dropoffCoordsRef.current.lon);
-      }
-
-      mapInstanceRef.current.events.add("click", (e: any) => {
-        const coords = e.get("coords");
-        const lat = coords[0];
-        const lon = coords[1];
-
-        const currentPickup = pickupCoordsRef.current;
-        const currentDropoff = dropoffCoordsRef.current;
-        const mode = currentModeRef.current;
-
-        if (selectionMode === "both") {
-          if (!currentPickup) {
-            const newCoords = { lat, lon };
-            setPickupCoords(newCoords);
-            pickupCoordsRef.current = newCoords;
-            addPickupMarker(lat, lon);
-            setCurrentMode("dropoff");
-            currentModeRef.current = "dropoff";
-          } else if (!currentDropoff) {
-            const newCoords = { lat, lon };
-            setDropoffCoords(newCoords);
-            dropoffCoordsRef.current = newCoords;
-            addDropoffMarker(lat, lon);
-            setCurrentMode("pickup");
-            currentModeRef.current = "pickup";
-          } else {
-            if (mode === "pickup") {
-              const newCoords = { lat, lon };
-              setPickupCoords(newCoords);
-              pickupCoordsRef.current = newCoords;
-              updatePickupMarker(lat, lon);
-              setCurrentMode("dropoff");
-              currentModeRef.current = "dropoff";
-            } else {
-              const newCoords = { lat, lon };
-              setDropoffCoords(newCoords);
-              dropoffCoordsRef.current = newCoords;
-              updateDropoffMarker(lat, lon);
-              setCurrentMode("pickup");
-              currentModeRef.current = "pickup";
-            }
-          }
-        } else if (selectionMode === "pickup") {
+      if (selectionMode === "both") {
+        if (!currentPickup) {
           const newCoords = { lat, lon };
           setPickupCoords(newCoords);
           pickupCoordsRef.current = newCoords;
-          updatePickupMarker(lat, lon);
-          onPickupChange?.(lat, lon);
-        } else if (selectionMode === "dropoff") {
+          addPickupMarker(lat, lon);
+          setCurrentMode("dropoff");
+          currentModeRef.current = "dropoff";
+        } else if (!currentDropoff) {
           const newCoords = { lat, lon };
           setDropoffCoords(newCoords);
           dropoffCoordsRef.current = newCoords;
-          updateDropoffMarker(lat, lon);
-          onDropoffChange?.(lat, lon);
+          addDropoffMarker(lat, lon);
+          setCurrentMode("pickup");
+          currentModeRef.current = "pickup";
+        } else {
+          if (mode === "pickup") {
+            const newCoords = { lat, lon };
+            setPickupCoords(newCoords);
+            pickupCoordsRef.current = newCoords;
+            updatePickupMarker(lat, lon);
+            setCurrentMode("dropoff");
+            currentModeRef.current = "dropoff";
+          } else {
+            const newCoords = { lat, lon };
+            setDropoffCoords(newCoords);
+            dropoffCoordsRef.current = newCoords;
+            updateDropoffMarker(lat, lon);
+            setCurrentMode("pickup");
+            currentModeRef.current = "pickup";
+          }
         }
-
-        updateRoute();
-      });
-
+      } else if (selectionMode === "pickup") {
+        const newCoords = { lat, lon };
+        setPickupCoords(newCoords);
+        pickupCoordsRef.current = newCoords;
+        updatePickupMarker(lat, lon);
+      } else if (selectionMode === "dropoff") {
+        const newCoords = { lat, lon };
+        setDropoffCoords(newCoords);
+        dropoffCoordsRef.current = newCoords;
+        updateDropoffMarker(lat, lon);
+      }
       updateRoute();
     });
+
+    updateRoute();
 
     return () => {
       if (mapInstanceRef.current) {
@@ -291,24 +210,18 @@ export function RouteMapPicker({
         mapInstanceRef.current = null;
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    updateRoute();
-  }, [pickupCoords, dropoffCoords, updateRoute]);
+  useEffect(() => { updateRoute(); }, [pickupCoords, dropoffCoords, updateRoute]);
 
   useEffect(() => {
     if (initialPickup && mapInstanceRef.current) {
       const newCoords = { lat: initialPickup.lat, lon: initialPickup.lon };
       const currentCoords = pickupCoordsRef.current;
-      if (
-        !currentCoords ||
-        Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 ||
-        Math.abs(currentCoords.lon - newCoords.lon) > 0.0001
-      ) {
+      if (!currentCoords || Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 || Math.abs(currentCoords.lon - newCoords.lon) > 0.0001) {
         setPickupCoords(newCoords);
         pickupCoordsRef.current = newCoords;
-        updatePickupMarker(initialPickup.lat, initialPickup.lon, initialPickup.address);
+        updatePickupMarker(initialPickup.lat, initialPickup.lon);
         updateRoute();
       }
     } else if (!initialPickup && pickupCoordsRef.current && mapInstanceRef.current) {
@@ -326,14 +239,10 @@ export function RouteMapPicker({
     if (initialDropoff && mapInstanceRef.current) {
       const newCoords = { lat: initialDropoff.lat, lon: initialDropoff.lon };
       const currentCoords = dropoffCoordsRef.current;
-      if (
-        !currentCoords ||
-        Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 ||
-        Math.abs(currentCoords.lon - newCoords.lon) > 0.0001
-      ) {
+      if (!currentCoords || Math.abs(currentCoords.lat - newCoords.lat) > 0.0001 || Math.abs(currentCoords.lon - newCoords.lon) > 0.0001) {
         setDropoffCoords(newCoords);
         dropoffCoordsRef.current = newCoords;
-        updateDropoffMarker(initialDropoff.lat, initialDropoff.lon, initialDropoff.address);
+        updateDropoffMarker(initialDropoff.lat, initialDropoff.lon);
         updateRoute();
       }
     } else if (!initialDropoff && dropoffCoordsRef.current && mapInstanceRef.current) {
@@ -347,194 +256,89 @@ export function RouteMapPicker({
     }
   }, [initialDropoff?.lat, initialDropoff?.lon, updateDropoffMarker, updateRoute]);
 
-  // Address suggestion handlers
-  const handlePickupInput = useCallback(async (value: string) => {
-    setPickupQuery(value);
-    if (!ymapsReadyRef.current || value.length < 2) {
-      setPickupSuggestions([]);
-      setShowPickupSuggestions(false);
-      return;
-    }
+  const handleGeocode = async (query: string, type: "pickup" | "dropoff") => {
+    if (!query.trim() || !mapInstanceRef.current) return;
     try {
-      const results = await window.ymaps.suggest(value);
-      setPickupSuggestions(results);
-      setShowPickupSuggestions(results.length > 0);
-    } catch {
-      setPickupSuggestions([]);
-      setShowPickupSuggestions(false);
-    }
-  }, []);
-
-  const handleDropoffInput = useCallback(async (value: string) => {
-    setDropoffQuery(value);
-    if (!ymapsReadyRef.current || value.length < 2) {
-      setDropoffSuggestions([]);
-      setShowDropoffSuggestions(false);
-      return;
-    }
-    try {
-      const results = await window.ymaps.suggest(value);
-      setDropoffSuggestions(results);
-      setShowDropoffSuggestions(results.length > 0);
-    } catch {
-      setDropoffSuggestions([]);
-      setShowDropoffSuggestions(false);
-    }
-  }, []);
-
-  const selectPickupSuggestion = useCallback(
-    async (item: any) => {
-      setPickupQuery(item.displayName);
-      setShowPickupSuggestions(false);
-      setPickupSuggestions([]);
-      try {
-        const res = await window.ymaps.geocode(item.displayName);
-        const firstGeoObject = res.geoObjects.get(0);
-        if (firstGeoObject) {
-          const coords = firstGeoObject.geometry.getCoordinates();
-          const address = firstGeoObject.getAddressLine();
+      const result = await ymaps.geocode(query, { results: 1 });
+      const firstGeoObject = result.geoObjects.get(0);
+      if (firstGeoObject) {
+        const coords = firstGeoObject.geometry.getCoordinates();
+        const address = firstGeoObject.getAddressLine?.() || query;
+        mapInstanceRef.current.setCenter(coords, 16);
+        if (type === "pickup") {
           const newCoords = { lat: coords[0], lon: coords[1] };
           setPickupCoords(newCoords);
           pickupCoordsRef.current = newCoords;
-          updatePickupMarker(coords[0], coords[1], address);
-          updateRoute();
-          mapInstanceRef.current?.setCenter(coords, mapInstanceRef.current.getZoom());
-        }
-      } catch {
-        // geocode failed silently
-      }
-    },
-    [updatePickupMarker, updateRoute]
-  );
-
-  const selectDropoffSuggestion = useCallback(
-    async (item: any) => {
-      setDropoffQuery(item.displayName);
-      setShowDropoffSuggestions(false);
-      setDropoffSuggestions([]);
-      try {
-        const res = await window.ymaps.geocode(item.displayName);
-        const firstGeoObject = res.geoObjects.get(0);
-        if (firstGeoObject) {
-          const coords = firstGeoObject.geometry.getCoordinates();
-          const address = firstGeoObject.getAddressLine();
+          updatePickupMarker(coords[0], coords[1]);
+          onPickupChange?.(coords[0], coords[1], address);
+        } else {
           const newCoords = { lat: coords[0], lon: coords[1] };
           setDropoffCoords(newCoords);
           dropoffCoordsRef.current = newCoords;
-          updateDropoffMarker(coords[0], coords[1], address);
-          updateRoute();
-          mapInstanceRef.current?.setCenter(coords, mapInstanceRef.current.getZoom());
+          updateDropoffMarker(coords[0], coords[1]);
+          onDropoffChange?.(coords[0], coords[1], address);
         }
-      } catch {
-        // geocode failed silently
+        updateRoute();
       }
-    },
-    [updateDropoffMarker, updateRoute]
-  );
+    } catch (err) {
+      console.error("Ошибка геокодирования:", err);
+    }
+  };
 
   return (
     <div className="space-y-3">
-      {/* Address search inputs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="relative">
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            Откуда
-          </label>
+      {/* Поиск адресов */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex gap-2">
           <input
             type="text"
-            value={pickupQuery}
-            onChange={(e) => handlePickupInput(e.target.value)}
-            onFocus={() => pickupSuggestions.length > 0 && setShowPickupSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowPickupSuggestions(false), 200)}
-            placeholder="Введите адрес отправления..."
-            className="w-full px-3 py-2 text-sm border border-green-300 dark:border-green-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500"
+            value={pickupSearch}
+            onChange={(e) => setPickupSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleGeocode(pickupSearch, "pickup")}
+            placeholder='Адрес "Откуда"...'
+            className="flex-1 px-3 py-2 text-sm border border-green-300 dark:border-green-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
           />
-          {showPickupSuggestions && pickupSuggestions.length > 0 && (
-            <ul className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {pickupSuggestions.map((item: any, idx: number) => (
-                <li
-                  key={idx}
-                  onMouseDown={() => selectPickupSuggestion(item)}
-                  className="px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-green-50 dark:hover:bg-green-900/30 cursor-pointer"
-                >
-                  {item.displayName}
-                </li>
-              ))}
-            </ul>
-          )}
+          <button type="button" onClick={() => handleGeocode(pickupSearch, "pickup")}
+            className="px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors whitespace-nowrap">
+            A
+          </button>
         </div>
-        <div className="relative">
-          <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            Куда
-          </label>
+        <div className="flex gap-2">
           <input
             type="text"
-            value={dropoffQuery}
-            onChange={(e) => handleDropoffInput(e.target.value)}
-            onFocus={() => dropoffSuggestions.length > 0 && setShowDropoffSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowDropoffSuggestions(false), 200)}
-            placeholder="Введите адрес назначения..."
-            className="w-full px-3 py-2 text-sm border border-red-300 dark:border-red-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+            value={dropoffSearch}
+            onChange={(e) => setDropoffSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleGeocode(dropoffSearch, "dropoff")}
+            placeholder='Адрес "Куда"...'
+            className="flex-1 px-3 py-2 text-sm border border-red-300 dark:border-red-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 dark:bg-gray-700 dark:text-white"
           />
-          {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
-            <ul className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {dropoffSuggestions.map((item: any, idx: number) => (
-                <li
-                  key={idx}
-                  onMouseDown={() => selectDropoffSuggestion(item)}
-                  className="px-3 py-2 text-sm text-gray-800 dark:text-gray-200 hover:bg-red-50 dark:hover:bg-red-900/30 cursor-pointer"
-                >
-                  {item.displayName}
-                </li>
-              ))}
-            </ul>
-          )}
+          <button type="button" onClick={() => handleGeocode(dropoffSearch, "dropoff")}
+            className="px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors whitespace-nowrap">
+            B
+          </button>
         </div>
       </div>
 
-      {/* Mode toggle buttons */}
       {selectionMode === "both" && (
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => setCurrentMode("pickup")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              currentMode === "pickup"
-                ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
-            }`}
-          >
+          <button type="button" onClick={() => setCurrentMode("pickup")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${currentMode === "pickup" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
             Выбрать "Откуда"
           </button>
-          <button
-            type="button"
-            onClick={() => setCurrentMode("dropoff")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              currentMode === "dropoff"
-                ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-                : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"
-            }`}
-          >
+          <button type="button" onClick={() => setCurrentMode("dropoff")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${currentMode === "dropoff" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200" : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
             Выбрать "Куда"
           </button>
         </div>
       )}
 
-      {/* Map */}
-      <div
-        ref={mapContainerRef}
-        style={{ height }}
-        className="w-full rounded-lg border border-gray-200 dark:border-gray-700"
-      />
+      <div ref={mapRef} style={{ height }} className="w-full rounded-lg border border-gray-200 dark:border-gray-700" />
 
-      {/* Coordinate display */}
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Откуда (A)</p>
           {pickupCoords ? (
-            <p className="text-gray-900 dark:text-white font-mono text-xs">
-              {pickupCoords.lat.toFixed(6)}, {pickupCoords.lon.toFixed(6)}
-            </p>
+            <p className="text-gray-900 dark:text-white font-mono text-xs">{pickupCoords.lat.toFixed(6)}, {pickupCoords.lon.toFixed(6)}</p>
           ) : (
             <p className="text-gray-400 dark:text-gray-500 italic">Не выбрано</p>
           )}
@@ -542,25 +346,17 @@ export function RouteMapPicker({
         <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Куда (B)</p>
           {dropoffCoords ? (
-            <p className="text-gray-900 dark:text-white font-mono text-xs">
-              {dropoffCoords.lat.toFixed(6)}, {dropoffCoords.lon.toFixed(6)}
-            </p>
+            <p className="text-gray-900 dark:text-white font-mono text-xs">{dropoffCoords.lat.toFixed(6)}, {dropoffCoords.lon.toFixed(6)}</p>
           ) : (
             <p className="text-gray-400 dark:text-gray-500 italic">Не выбрано</p>
           )}
         </div>
       </div>
 
-      {/* Instructions */}
       <div className="text-xs text-gray-500 dark:text-gray-400">
-        {selectionMode === "both" ? (
-          <>
-            Кликните на карте, чтобы выбрать точку "{currentMode === "pickup" ? "Откуда" : "Куда"}".
-            Вы можете перетаскивать маркеры для точной настройки.
-          </>
-        ) : (
-          `Кликните на карте, чтобы выбрать точку "${selectionMode === "pickup" ? "Откуда" : "Куда"}". Вы можете перетаскивать маркер для точной настройки.`
-        )}
+        {selectionMode === "both"
+          ? `Введите адрес или кликните на карте, чтобы выбрать точку "${currentMode === "pickup" ? "Откуда" : "Куда"}". Маркеры можно перетаскивать.`
+          : `Введите адрес или кликните на карте, чтобы выбрать точку "${selectionMode === "pickup" ? "Откуда" : "Куда"}".`}
       </div>
     </div>
   );

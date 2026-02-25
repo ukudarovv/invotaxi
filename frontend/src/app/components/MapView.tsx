@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface MapViewProps {
   center: [number, number];
@@ -17,36 +17,44 @@ export function MapView({
   draggable = false,
   onMarkerPositionChange,
 }: MapViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<ymaps.Map | null>(null);
-  const placemarkRef = useRef<ymaps.Placemark | null>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const markerRef = useRef<ymaps.Placemark | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    ymaps.ready(() => setReady(true));
+  }, []);
 
-    let destroyed = false;
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
 
-    ymaps.ready(() => {
-      if (destroyed || !containerRef.current) return;
-
-      const map = new ymaps.Map(containerRef.current, {
-        center,
+    if (!mapInstanceRef.current) {
+      mapInstanceRef.current = new ymaps.Map(mapRef.current, {
+        center: [center[0], center[1]],
         zoom,
         controls: ["zoomControl"],
       });
-      mapRef.current = map;
+    } else {
+      mapInstanceRef.current.setCenter([center[0], center[1]], zoom);
+    }
+  }, [ready, center, zoom]);
 
-      const position = markerPosition || center;
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current) return;
 
+    const position = markerPosition || center;
+
+    if (markerRef.current) {
+      mapInstanceRef.current.geoObjects.remove(markerRef.current);
+      markerRef.current = null;
+    }
+
+    if (position) {
       const placemark = new ymaps.Placemark(
-        position,
-        {
-          balloonContent: popupContent || "",
-        },
-        {
-          draggable,
-          preset: "islands#blueDotIcon",
-        }
+        [position[0], position[1]],
+        { balloonContent: popupContent || "" },
+        { draggable, preset: "islands#blueCircleDotIcon" }
       );
 
       if (draggable && onMarkerPositionChange) {
@@ -56,36 +64,19 @@ export function MapView({
         });
       }
 
-      map.geoObjects.add(placemark);
-      placemarkRef.current = placemark;
-    });
+      mapInstanceRef.current.geoObjects.add(placemark);
+      markerRef.current = placemark;
+    }
+  }, [ready, markerPosition, popupContent, draggable, onMarkerPositionChange, center]);
 
+  useEffect(() => {
     return () => {
-      destroyed = true;
-      if (mapRef.current) {
-        mapRef.current.destroy();
-        mapRef.current = null;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
       }
-      placemarkRef.current = null;
     };
   }, []);
 
-  useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.setCenter(center, zoom);
-  }, [center, zoom]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const placemark = placemarkRef.current;
-    if (!map || !placemark) return;
-
-    const position = markerPosition || center;
-    placemark.geometry.setCoordinates(position);
-
-    placemark.properties.set("balloonContent", popupContent || "");
-    placemark.options.set("draggable", draggable);
-  }, [markerPosition, popupContent, draggable, center]);
-
-  return <div ref={containerRef} className="w-full h-full rounded-lg" />;
+  return <div ref={mapRef} className="w-full h-full rounded-lg" />;
 }

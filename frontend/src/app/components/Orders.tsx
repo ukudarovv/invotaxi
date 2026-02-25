@@ -2193,16 +2193,18 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             </label>
             <RouteMapPicker
               height="400px"
-              onPickupChange={(lat, lon) => {
+              onPickupChange={(lat, lon, address) => {
                 setPickupCoords({ lat, lon });
                 setPickupLatInput(lat.toFixed(6));
                 setPickupLonInput(lon.toFixed(6));
+                if (address) setPickupAddress(address);
                 setGeocodeErrorPickup(null);
               }}
-              onDropoffChange={(lat, lon) => {
+              onDropoffChange={(lat, lon, address) => {
                 setDropoffCoords({ lat, lon });
                 setDropoffLatInput(lat.toFixed(6));
                 setDropoffLonInput(lon.toFixed(6));
+                if (address) setDropoffAddress(address);
                 setGeocodeErrorDropoff(null);
               }}
               initialPickup={pickupCoords ? { lat: pickupCoords.lat, lon: pickupCoords.lon } : undefined}

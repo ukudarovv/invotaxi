@@ -19,7 +19,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'leaflet', 'leaflet.markercluster'],
+    include: ['react', 'react-dom'],
   },
   preview: { allowedHosts: ["invotaxi.ukudarov.pro"], host: true },
   server: { allowedHosts: ["invotaxi.ukudarov.pro"], host: true },

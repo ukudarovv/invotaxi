@@ -1,14 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { useEffect, useRef, useState, useCallback } from "react";
 
-// Fix for default marker icon
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+declare global {
+  interface Window {
+    ymaps: any;
+  }
+  const ymaps: any;
+}
 
 interface MapCoordinatePickerProps {
   /** Начальная широта */
@@ -36,7 +33,7 @@ interface MapCoordinatePickerProps {
 }
 
 export function MapCoordinatePicker({
-  initialLat = 47.10869114222083, // Атырау по умолчанию
+  initialLat = 47.10869114222083,
   initialLon = 51.9049072265625,
   initialZoom = 13,
   height = "400px",
@@ -49,420 +46,526 @@ export function MapCoordinatePicker({
   disabled = false,
 }: MapCoordinatePickerProps) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
-  const circleRef = useRef<L.Circle | null>(null);
-  const polygonRef = useRef<L.Polygon | null>(null);
-  const polygonPointsRef = useRef<L.Marker[]>([]);
+  const mapInstanceRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+  const circleRef = useRef<any>(null);
+  const polygonObjRef = useRef<any>(null);
+  const polygonPointMarkersRef = useRef<any[]>([]);
+
   const [currentLat, setCurrentLat] = useState(initialLat);
   const [currentLon, setCurrentLon] = useState(initialLon);
   const [polygonPoints, setPolygonPoints] = useState<number[][]>(initialPolygon || []);
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null);
 
-  // Инициализация карты
-  useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const suggestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchWrapperRef = useRef<HTMLDivElement>(null);
 
-    // Небольшая задержка для правильной инициализации внутри модального окна
-    const timer = setTimeout(() => {
-      if (!mapRef.current || mapInstanceRef.current) return;
-      
-      mapInstanceRef.current = L.map(mapRef.current, {
-        zoomControl: true,
-      }).setView([initialLat, initialLon], initialZoom);
+  const polygonPointsStateRef = useRef<number[][]>(initialPolygon || []);
+  polygonPointsStateRef.current = polygonPoints;
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19,
-    }).addTo(mapInstanceRef.current);
+  const onCoordinateChangeRef = useRef(onCoordinateChange);
+  onCoordinateChangeRef.current = onCoordinateChange;
+  const onPolygonChangeRef = useRef(onPolygonChange);
+  onPolygonChangeRef.current = onPolygonChange;
 
-    // Добавляем начальный маркер
-    if (!polygonMode) {
-      markerRef.current = L.marker([initialLat, initialLon]).addTo(mapInstanceRef.current);
-      markerRef.current.on("dragend", (e) => {
-        const latlng = e.target.getLatLng();
-        setCurrentLat(latlng.lat);
-        setCurrentLon(latlng.lng);
-        onCoordinateChange?.(latlng.lat, latlng.lng);
-      });
-    }
+  const updatePolygonShape = useCallback((points: number[]) => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
 
-    // Добавляем круг радиуса, если указан
-    if (serviceRadius && serviceRadius > 0) {
-      circleRef.current = L.circle([initialLat, initialLon], {
-        radius: serviceRadius,
-        color: "#3b82f6",
-        fillColor: "#3b82f6",
-        fillOpacity: 0.2,
-        weight: 2,
-      }).addTo(mapInstanceRef.current);
-    }
-
-    // Устанавливаем начальные координаты в состояние
-    setCurrentLat(initialLat);
-    setCurrentLon(initialLon);
-
-    // Обработчик клика на карту
-    if (!disabled) {
-      mapInstanceRef.current.on("click", (e: L.LeafletMouseEvent) => {
-        if (polygonMode) {
-          // Режим рисования полигона
-          const newPoint: [number, number] = [e.latlng.lat, e.latlng.lng];
-          const newPoints = [...polygonPoints, [e.latlng.lat, e.latlng.lng]];
-          setPolygonPoints(newPoints);
-          onPolygonChange?.(newPoints);
-
-          // Добавляем маркер для точки с возможностью перетаскивания
-          const pointMarker = L.marker(newPoint, {
-            icon: L.divIcon({
-              className: "polygon-point-marker",
-              html: `<div style="width: 16px; height: 16px; border-radius: 50%; background: #ef4444; border: 3px solid white; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
-              iconSize: [16, 16],
-              iconAnchor: [8, 8],
-            }),
-            draggable: true,
-          }).addTo(mapInstanceRef.current!);
-
-          const pointIndex = newPoints.length - 1;
-
-          // Обновление позиции точки при перетаскивании
-          pointMarker.on("drag", (e) => {
-            const latlng = e.target.getLatLng();
-            const updatedPoints = [...polygonPoints];
-            updatedPoints[pointIndex] = [latlng.lat, latlng.lng];
-            setPolygonPoints(updatedPoints);
-            updatePolygon(updatedPoints);
-          });
-
-          // Обновление после завершения перетаскивания
-          pointMarker.on("dragend", (e) => {
-            const latlng = e.target.getLatLng();
-            const updatedPoints = [...polygonPoints];
-            updatedPoints[pointIndex] = [latlng.lat, latlng.lng];
-            setPolygonPoints(updatedPoints);
-            onPolygonChange?.(updatedPoints);
-            updatePolygon(updatedPoints);
-          });
-
-          // Выделение точки при клике
-          pointMarker.on("click", (e) => {
-            e.originalEvent?.stopPropagation();
-            setSelectedPointIndex(pointIndex);
-            // Подсветка выбранной точки
-            pointMarker.setIcon(L.divIcon({
-              className: "polygon-point-marker selected",
-              html: `<div style="width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; border: 3px solid white; cursor: move; box-shadow: 0 2px 8px rgba(59,130,246,0.6);"></div>`,
-              iconSize: [20, 20],
-              iconAnchor: [10, 10],
-            }));
-          });
-
-          // Удаление точки при двойном клике
-          pointMarker.on("dblclick", (e) => {
-            e.originalEvent?.stopPropagation();
-            if (polygonPoints.length > 3) {
-              const index = polygonPointsRef.current.indexOf(pointMarker);
-              if (index > -1) {
-                const updatedPoints = polygonPoints.filter((_, i) => i !== index);
-                setPolygonPoints(updatedPoints);
-                onPolygonChange?.(updatedPoints);
-                mapInstanceRef.current?.removeLayer(pointMarker);
-                polygonPointsRef.current.splice(index, 1);
-                updatePolygon(updatedPoints);
-                setSelectedPointIndex(null);
-              }
-            }
-          });
-
-          polygonPointsRef.current.push(pointMarker);
-          updatePolygon(newPoints);
-        } else {
-          // Режим выбора точки
-          const lat = e.latlng.lat;
-          const lon = e.latlng.lng;
-          setCurrentLat(lat);
-          setCurrentLon(lon);
-
-          // Перемещаем маркер
-          if (markerRef.current) {
-            markerRef.current.setLatLng([lat, lon]);
-          } else {
-            markerRef.current = L.marker([lat, lon]).addTo(mapInstanceRef.current!);
-            markerRef.current.on("dragend", (e) => {
-              const latlng = e.target.getLatLng();
-              setCurrentLat(latlng.lat);
-              setCurrentLon(latlng.lng);
-              onCoordinateChange?.(latlng.lat, latlng.lng);
-            });
-          }
-
-          // Обновляем круг радиуса
-          if (circleRef.current && serviceRadius && serviceRadius > 0) {
-            circleRef.current.setLatLng([lat, lon]);
-          }
-
-          onCoordinateChange?.(lat, lon);
-        }
-      });
-    }
-
-      // Принудительно обновляем размер карты после инициализации
-      setTimeout(() => {
-        mapInstanceRef.current?.invalidateSize();
-      }, 100);
-    }, 50);
-
-    return () => {
-      clearTimeout(timer);
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
-  }, []);
-
-  // Обновление позиции карты и маркера при изменении initialLat/initialLon
-  useEffect(() => {
-    if (!mapInstanceRef.current) return;
-
-    // Обновляем состояние координат
-    setCurrentLat(initialLat);
-    setCurrentLon(initialLon);
-
-    // Обновляем центр карты
-    mapInstanceRef.current.setView([initialLat, initialLon], mapInstanceRef.current.getZoom());
-
-    // Обновляем позицию маркера, если он существует
-    if (markerRef.current && !polygonMode) {
-      markerRef.current.setLatLng([initialLat, initialLon]);
-    }
-
-    // Обновляем позицию круга, если он существует
-    if (circleRef.current) {
-      mapInstanceRef.current.removeLayer(circleRef.current);
-      if (serviceRadius && serviceRadius > 0) {
-        circleRef.current = L.circle([initialLat, initialLon], {
-          radius: serviceRadius,
-          color: "#3b82f6",
-          fillColor: "#3b82f6",
-          fillOpacity: 0.2,
-          weight: 2,
-        }).addTo(mapInstanceRef.current);
-      } else {
-        circleRef.current = null;
-      }
-    } else if (serviceRadius && serviceRadius > 0) {
-      // Создаем круг, если его еще нет
-      circleRef.current = L.circle([initialLat, initialLon], {
-        radius: serviceRadius,
-        color: "#3b82f6",
-        fillColor: "#3b82f6",
-        fillOpacity: 0.2,
-        weight: 2,
-      }).addTo(mapInstanceRef.current);
-    }
-  }, [initialLat, initialLon, polygonMode, serviceRadius]);
-
-  // Обновление полигона
-  const updatePolygon = (points: number[][]) => {
-    if (polygonRef.current) {
-      mapInstanceRef.current?.removeLayer(polygonRef.current);
+    if (polygonObjRef.current) {
+      map.geoObjects.remove(polygonObjRef.current);
+      polygonObjRef.current = null;
     }
 
     if (points.length >= 3) {
-      const latlngs = points.map((p) => [p[0], p[1]] as [number, number]);
-      polygonRef.current = L.polygon(latlngs, {
-        color: "#3b82f6",
-        fillColor: "#3b82f6",
-        fillOpacity: 0.2,
-        weight: 2,
-      }).addTo(mapInstanceRef.current!);
+      const coords = points.map((p: any) => [p[0], p[1]]);
+      polygonObjRef.current = new ymaps.Polygon(
+        [coords],
+        {},
+        {
+          fillColor: "#3b82f633",
+          strokeColor: "#3b82f6",
+          strokeWidth: 2,
+          fillOpacity: 0.2,
+        }
+      );
+      map.geoObjects.add(polygonObjRef.current);
     }
-  };
+  }, []);
 
-  // Очистка полигона
-  const clearPolygon = () => {
-    // Удаляем все маркеры точек
-    polygonPointsRef.current.forEach((marker) => {
-      mapInstanceRef.current?.removeLayer(marker);
-    });
-    polygonPointsRef.current = [];
-    
-    // Удаляем полигон
-    if (polygonRef.current) {
-      mapInstanceRef.current?.removeLayer(polygonRef.current);
-      polygonRef.current = null;
-    }
+  const createPointMarker = useCallback(
+    (point: number[], index: number, allPoints: number[][]) => {
+      const map = mapInstanceRef.current;
+      if (!map) return null;
 
-    // Очищаем состояние
-    setPolygonPoints([]);
-    setSelectedPointIndex(null);
-    onPolygonChange?.([]);
-  };
+      const placemark = new ymaps.Placemark(
+        [point[0], point[1]],
+        {},
+        {
+          draggable: !disabled,
+          preset: "islands#redCircleDotIcon",
+          iconColor: "#ef4444",
+        }
+      );
 
-  // Восстановление маркеров при изменении initialPolygon
-  const recreatePolygonMarkers = (points: number[][]) => {
-    // Удаляем старые маркеры
-    polygonPointsRef.current.forEach((marker) => {
-      mapInstanceRef.current?.removeLayer(marker);
-    });
-    polygonPointsRef.current = [];
-
-    // Создаем новые маркеры для каждой точки
-    points.forEach((point, index) => {
-      const pointMarker = L.marker([point[0], point[1]], {
-        icon: L.divIcon({
-          className: "polygon-point-marker",
-          html: `<div style="width: 16px; height: 16px; border-radius: 50%; background: #ef4444; border: 3px solid white; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
-          iconSize: [16, 16],
-          iconAnchor: [8, 8],
-        }),
-        draggable: true,
-      }).addTo(mapInstanceRef.current!);
-
-      // Обновление позиции точки при перетаскивании
-      pointMarker.on("drag", (e) => {
-        const latlng = e.target.getLatLng();
-        const updatedPoints = [...points];
-        updatedPoints[index] = [latlng.lat, latlng.lng];
-        setPolygonPoints(updatedPoints);
-        updatePolygon(updatedPoints);
-      });
-
-      // Обновление после завершения перетаскивания
-      pointMarker.on("dragend", (e) => {
-        const latlng = e.target.getLatLng();
-        const updatedPoints = [...points];
-        updatedPoints[index] = [latlng.lat, latlng.lng];
-        setPolygonPoints(updatedPoints);
-        onPolygonChange?.(updatedPoints);
-        updatePolygon(updatedPoints);
-      });
-
-      // Выделение точки при клике
-      pointMarker.on("click", (e) => {
-        e.originalEvent?.stopPropagation();
-        setSelectedPointIndex(index);
-        // Сбрасываем стиль других точек
-        polygonPointsRef.current.forEach((m, i) => {
-          if (i !== index) {
-            m.setIcon(L.divIcon({
-              className: "polygon-point-marker",
-              html: `<div style="width: 16px; height: 16px; border-radius: 50%; background: #ef4444; border: 3px solid white; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
-              iconSize: [16, 16],
-              iconAnchor: [8, 8],
-            }));
+      if (!disabled) {
+        placemark.events.add("drag", () => {
+          const coords = placemark.geometry.getCoordinates();
+          const currentPts = [...polygonPointsStateRef.current];
+          const markerIdx = polygonPointMarkersRef.current.indexOf(placemark);
+          if (markerIdx > -1 && currentPts[markerIdx]) {
+            currentPts[markerIdx] = [coords[0], coords[1]];
+            setPolygonPoints(currentPts);
+            updatePolygonShape(currentPts as any);
           }
         });
-        // Подсветка выбранной точки
-        pointMarker.setIcon(L.divIcon({
-          className: "polygon-point-marker selected",
-          html: `<div style="width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; border: 3px solid white; cursor: move; box-shadow: 0 2px 8px rgba(59,130,246,0.6);"></div>`,
-          iconSize: [20, 20],
-          iconAnchor: [10, 10],
-        }));
-      });
 
-      // Удаление точки при двойном клике
-      pointMarker.on("dblclick", (e) => {
-        e.originalEvent?.stopPropagation();
-        if (points.length > 3) {
-          const markerIndex = polygonPointsRef.current.indexOf(pointMarker);
-          if (markerIndex > -1) {
-            const updatedPoints = points.filter((_, i) => i !== markerIndex);
-            setPolygonPoints(updatedPoints);
-            onPolygonChange?.(updatedPoints);
-            mapInstanceRef.current?.removeLayer(pointMarker);
-            polygonPointsRef.current.splice(markerIndex, 1);
-            updatePolygon(updatedPoints);
-            setSelectedPointIndex(null);
-            // Пересоздаем маркеры для обновления индексов
-            recreatePolygonMarkers(updatedPoints);
+        placemark.events.add("dragend", () => {
+          const coords = placemark.geometry.getCoordinates();
+          const currentPts = [...polygonPointsStateRef.current];
+          const markerIdx = polygonPointMarkersRef.current.indexOf(placemark);
+          if (markerIdx > -1 && currentPts[markerIdx]) {
+            currentPts[markerIdx] = [coords[0], coords[1]];
+            setPolygonPoints(currentPts);
+            onPolygonChangeRef.current?.(currentPts);
+            updatePolygonShape(currentPts as any);
           }
+        });
+
+        placemark.events.add("click", (e: any) => {
+          e.stopPropagation();
+          const markerIdx = polygonPointMarkersRef.current.indexOf(placemark);
+          setSelectedPointIndex(markerIdx);
+          polygonPointMarkersRef.current.forEach((m, i) => {
+            if (i === markerIdx) {
+              m.options.set("iconColor", "#3b82f6");
+              m.options.set("preset", "islands#blueCircleDotIcon");
+            } else {
+              m.options.set("iconColor", "#ef4444");
+              m.options.set("preset", "islands#redCircleDotIcon");
+            }
+          });
+        });
+
+        placemark.events.add("dblclick", (e: any) => {
+          e.stopPropagation();
+          const currentPts = [...polygonPointsStateRef.current];
+          if (currentPts.length > 3) {
+            const markerIdx = polygonPointMarkersRef.current.indexOf(placemark);
+            if (markerIdx > -1) {
+              const updatedPoints = currentPts.filter((_, i) => i !== markerIdx);
+              map.geoObjects.remove(placemark);
+              polygonPointMarkersRef.current.splice(markerIdx, 1);
+              setPolygonPoints(updatedPoints);
+              onPolygonChangeRef.current?.(updatedPoints);
+              updatePolygonShape(updatedPoints as any);
+              setSelectedPointIndex(null);
+            }
+          }
+        });
+      }
+
+      map.geoObjects.add(placemark);
+      return placemark;
+    },
+    [disabled, updatePolygonShape]
+  );
+
+  const recreatePolygonMarkers = useCallback(
+    (points: number[][]) => {
+      const map = mapInstanceRef.current;
+      if (!map) return;
+
+      polygonPointMarkersRef.current.forEach((m) => {
+        map.geoObjects.remove(m);
+      });
+      polygonPointMarkersRef.current = [];
+
+      points.forEach((point, index) => {
+        const marker = createPointMarker(point, index, points);
+        if (marker) {
+          polygonPointMarkersRef.current.push(marker);
         }
       });
+    },
+    [createPointMarker]
+  );
 
-      polygonPointsRef.current.push(pointMarker);
-    });
-  };
-
-  // Обновление маркера при изменении начальных координат
+  // Initialize map
   useEffect(() => {
-    if (!mapInstanceRef.current || polygonMode) return;
+    if (!mapRef.current) return;
+
+    let destroyed = false;
+
+    const initMap = () => {
+      if (destroyed || !mapRef.current || mapInstanceRef.current) return;
+
+      const map = new ymaps.Map(mapRef.current, {
+        center: [initialLat, initialLon],
+        zoom: initialZoom,
+        controls: ["zoomControl"],
+      });
+
+      mapInstanceRef.current = map;
+
+      if (!polygonMode) {
+        const placemark = new ymaps.Placemark(
+          [initialLat, initialLon],
+          {},
+          {
+            draggable: !disabled,
+            preset: "islands#redDotIcon",
+          }
+        );
+
+        if (!disabled) {
+          placemark.events.add("dragend", () => {
+            const coords = placemark.geometry.getCoordinates();
+            setCurrentLat(coords[0]);
+            setCurrentLon(coords[1]);
+            onCoordinateChangeRef.current?.(coords[0], coords[1]);
+
+            if (circleRef.current) {
+              circleRef.current.geometry.setCoordinates(coords);
+            }
+          });
+        }
+
+        map.geoObjects.add(placemark);
+        markerRef.current = placemark;
+      }
+
+      if (serviceRadius && serviceRadius > 0) {
+        const circle = new ymaps.Circle(
+          [[initialLat, initialLon], serviceRadius],
+          {},
+          {
+            fillColor: "#3b82f633",
+            strokeColor: "#3b82f6",
+            strokeWidth: 2,
+            fillOpacity: 0.2,
+          }
+        );
+        map.geoObjects.add(circle);
+        circleRef.current = circle;
+      }
+
+      if (!disabled) {
+        map.events.add("click", (e: any) => {
+          const coords = e.get("coords");
+          if (polygonMode) {
+            const newPoint = [coords[0], coords[1]];
+            const currentPts = [...polygonPointsStateRef.current, newPoint];
+            setPolygonPoints(currentPts);
+            onPolygonChangeRef.current?.(currentPts);
+
+            const marker = createPointMarker(newPoint, currentPts.length - 1, currentPts);
+            if (marker) {
+              polygonPointMarkersRef.current.push(marker);
+            }
+            updatePolygonShape(currentPts as any);
+          } else {
+            const lat = coords[0];
+            const lon = coords[1];
+            setCurrentLat(lat);
+            setCurrentLon(lon);
+
+            if (markerRef.current) {
+              markerRef.current.geometry.setCoordinates([lat, lon]);
+            } else {
+              const placemark = new ymaps.Placemark(
+                [lat, lon],
+                {},
+                {
+                  draggable: !disabled,
+                  preset: "islands#redDotIcon",
+                }
+              );
+              placemark.events.add("dragend", () => {
+                const c = placemark.geometry.getCoordinates();
+                setCurrentLat(c[0]);
+                setCurrentLon(c[1]);
+                onCoordinateChangeRef.current?.(c[0], c[1]);
+                if (circleRef.current) {
+                  circleRef.current.geometry.setCoordinates(c);
+                }
+              });
+              map.geoObjects.add(placemark);
+              markerRef.current = placemark;
+            }
+
+            if (circleRef.current) {
+              circleRef.current.geometry.setCoordinates([lat, lon]);
+            }
+
+            onCoordinateChangeRef.current?.(lat, lon);
+          }
+        });
+      }
+
+      setCurrentLat(initialLat);
+      setCurrentLon(initialLon);
+    };
+
+    const timer = setTimeout(() => {
+      if (typeof ymaps !== "undefined" && ymaps.ready) {
+        ymaps.ready(initMap);
+      }
+    }, 50);
+
+    return () => {
+      destroyed = true;
+      clearTimeout(timer);
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+      }
+      markerRef.current = null;
+      circleRef.current = null;
+      polygonObjRef.current = null;
+      polygonPointMarkersRef.current = [];
+    };
+  }, []);
+
+  // Update map center and marker when initialLat/initialLon change
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    setCurrentLat(initialLat);
+    setCurrentLon(initialLon);
+
+    map.setCenter([initialLat, initialLon], map.getZoom());
+
+    if (markerRef.current && !polygonMode) {
+      markerRef.current.geometry.setCoordinates([initialLat, initialLon]);
+    }
+
+    if (circleRef.current) {
+      map.geoObjects.remove(circleRef.current);
+      circleRef.current = null;
+    }
+    if (serviceRadius && serviceRadius > 0) {
+      const circle = new ymaps.Circle(
+        [[initialLat, initialLon], serviceRadius],
+        {},
+        {
+          fillColor: "#3b82f633",
+          strokeColor: "#3b82f6",
+          strokeWidth: 2,
+          fillOpacity: 0.2,
+        }
+      );
+      map.geoObjects.add(circle);
+      circleRef.current = circle;
+    }
+  }, [initialLat, initialLon, polygonMode, serviceRadius]);
+
+  // Update marker position when currentLat/currentLon change
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || polygonMode) return;
 
     if (markerRef.current) {
-      markerRef.current.setLatLng([currentLat, currentLon]);
-    } else {
-      markerRef.current = L.marker([currentLat, currentLon]).addTo(mapInstanceRef.current);
-      markerRef.current.on("dragend", (e) => {
-        const latlng = e.target.getLatLng();
-        setCurrentLat(latlng.lat);
-        setCurrentLon(latlng.lng);
-        onCoordinateChange?.(latlng.lat, latlng.lng);
-      });
+      markerRef.current.geometry.setCoordinates([currentLat, currentLon]);
     }
 
     if (circleRef.current && serviceRadius && serviceRadius > 0) {
-      circleRef.current.setLatLng([currentLat, currentLon]);
+      circleRef.current.geometry.setCoordinates([currentLat, currentLon]);
     }
   }, [currentLat, currentLon, polygonMode]);
 
-  // Обновление круга радиуса
+  // Update service radius circle
   useEffect(() => {
-    if (!mapInstanceRef.current || polygonMode) return;
+    const map = mapInstanceRef.current;
+    if (!map || polygonMode) return;
 
     if (circleRef.current) {
       if (serviceRadius && serviceRadius > 0) {
-        circleRef.current.setRadius(serviceRadius);
-        circleRef.current.setLatLng([currentLat, currentLon]);
+        circleRef.current.geometry.setRadius(serviceRadius);
+        circleRef.current.geometry.setCoordinates([currentLat, currentLon]);
       } else {
-        mapInstanceRef.current.removeLayer(circleRef.current);
+        map.geoObjects.remove(circleRef.current);
         circleRef.current = null;
       }
     } else if (serviceRadius && serviceRadius > 0) {
-      circleRef.current = L.circle([currentLat, currentLon], {
-        radius: serviceRadius,
-        color: "#3b82f6",
-        fillColor: "#3b82f6",
-        fillOpacity: 0.2,
-        weight: 2,
-      }).addTo(mapInstanceRef.current);
+      const circle = new ymaps.Circle(
+        [[currentLat, currentLon], serviceRadius],
+        {},
+        {
+          fillColor: "#3b82f633",
+          strokeColor: "#3b82f6",
+          strokeWidth: 2,
+          fillOpacity: 0.2,
+        }
+      );
+      map.geoObjects.add(circle);
+      circleRef.current = circle;
     }
   }, [serviceRadius, currentLat, currentLon, polygonMode]);
 
-  // Обновление полигона при изменении initialPolygon
+  // Restore polygon from initialPolygon
   useEffect(() => {
     if (!polygonMode || !mapInstanceRef.current) return;
-    
+
     if (initialPolygon && initialPolygon.length > 0) {
       setPolygonPoints(initialPolygon);
       recreatePolygonMarkers(initialPolygon);
-      updatePolygon(initialPolygon);
+      updatePolygonShape(initialPolygon as any);
     } else {
       setPolygonPoints([]);
       clearPolygon();
     }
   }, [initialPolygon, polygonMode]);
 
-  // Обновление размера карты при изменении видимости (для модальных окон)
-  useEffect(() => {
-    if (!mapInstanceRef.current) return;
-    
-    // Обновляем размер карты с небольшой задержкой для корректной работы в модальных окнах
-    const timer = setTimeout(() => {
-      mapInstanceRef.current?.invalidateSize();
-    }, 100);
+  const clearPolygon = () => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
 
-    return () => clearTimeout(timer);
-  }, [height]);
+    polygonPointMarkersRef.current.forEach((m) => {
+      map.geoObjects.remove(m);
+    });
+    polygonPointMarkersRef.current = [];
+
+    if (polygonObjRef.current) {
+      map.geoObjects.remove(polygonObjRef.current);
+      polygonObjRef.current = null;
+    }
+
+    setPolygonPoints([]);
+    setSelectedPointIndex(null);
+    onPolygonChange?.([]);
+  };
+
+  // Address search via ymaps.suggest
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+
+    if (suggestTimeoutRef.current) {
+      clearTimeout(suggestTimeoutRef.current);
+    }
+
+    if (!value.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    suggestTimeoutRef.current = setTimeout(() => {
+      if (typeof ymaps !== "undefined" && ymaps.suggest) {
+        ymaps
+          .suggest(value)
+          .then((items: any[]) => {
+            setSuggestions(items || []);
+            setShowSuggestions((items || []).length > 0);
+          })
+          .catch(() => {
+            setSuggestions([]);
+            setShowSuggestions(false);
+          });
+      }
+    }, 300);
+  };
+
+  const handleSuggestionSelect = (suggestion: any) => {
+    const address = suggestion.value || suggestion.displayName || "";
+    setSearchQuery(address);
+    setSuggestions([]);
+    setShowSuggestions(false);
+
+    if (typeof ymaps !== "undefined" && ymaps.geocode) {
+      ymaps.geocode(address).then((result: any) => {
+        const firstGeoObject = result.geoObjects.get(0);
+        if (firstGeoObject) {
+          const coords = firstGeoObject.geometry.getCoordinates();
+          const lat = coords[0];
+          const lon = coords[1];
+
+          setCurrentLat(lat);
+          setCurrentLon(lon);
+
+          const map = mapInstanceRef.current;
+          if (map) {
+            map.setCenter([lat, lon], map.getZoom());
+          }
+
+          if (markerRef.current && !polygonMode) {
+            markerRef.current.geometry.setCoordinates([lat, lon]);
+          }
+
+          if (circleRef.current) {
+            circleRef.current.geometry.setCoordinates([lat, lon]);
+          }
+
+          onCoordinateChange?.(lat, lon);
+        }
+      });
+    }
+  };
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchWrapperRef.current && !searchWrapperRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
     <div className="space-y-2">
+      {/* Address search */}
+      <div ref={searchWrapperRef} style={{ position: "relative" }}>
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => handleSearchInput(e.target.value)}
+          onFocus={() => {
+            if (suggestions.length > 0) setShowSuggestions(true);
+          }}
+          placeholder="Поиск адреса..."
+          disabled={disabled}
+          className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white text-sm"
+        />
+        {showSuggestions && suggestions.length > 0 && (
+          <ul
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              right: 0,
+              zIndex: 1000,
+              maxHeight: "200px",
+              overflowY: "auto",
+            }}
+            className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg mt-1"
+          >
+            {suggestions.map((s: any, i: number) => (
+              <li
+                key={i}
+                onClick={() => handleSuggestionSelect(s)}
+                className="px-4 py-2 text-sm cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200"
+              >
+                {s.displayName || s.value}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Map container */}
       <div
         ref={mapRef}
-        style={{ height, position: 'relative', zIndex: 'auto' }}
-        className="w-full rounded-lg border border-gray-200 dark:border-gray-700 leaflet-map-container"
+        style={{ height, position: "relative", zIndex: "auto" }}
+        className="w-full rounded-lg border border-gray-200 dark:border-gray-700"
       />
+
+      {/* Coordinate / polygon info display */}
       {!polygonMode && (
         <div className="text-sm text-gray-600 dark:text-gray-400">
           Координаты: {currentLat.toFixed(6)}, {currentLon.toFixed(6)}

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Calendar, MapPin, Clock, Car, User, Loader2, RefreshCw, CheckCircle, AlertCircle, Route, Users, Navigation,
+  Calendar, MapPin, Clock, Car, User, Loader2, RefreshCw, CheckCircle, AlertCircle, Route, Users, Navigation, Brain, BarChart3,
 } from "lucide-react";
-import { dispatchApi, DailyRoutesResponse, DailyRoute } from "../services/dispatch";
+import { dispatchApi, DailyRoutesResponse, DailyRoute, MLScoreDetails } from "../services/dispatch";
 import { toast } from "sonner";
 
 function formatTime(iso: string | null): string {
@@ -31,6 +31,31 @@ function statusColor(status: string): string {
   if (["submitted", "active_queue", "awaiting_dispatcher_decision"].includes(status))
     return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
   return "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300";
+}
+
+function ScoreBar({ label, value, color, extra }: { label: string; value: number; color: string; extra?: string }) {
+  const pct = Math.round(value * 100);
+  const colorMap: Record<string, string> = {
+    blue: "bg-blue-500",
+    amber: "bg-amber-500",
+    red: "bg-red-500",
+    orange: "bg-orange-500",
+    green: "bg-green-500",
+    purple: "bg-purple-500",
+  };
+  const bgColor = colorMap[color] || "bg-gray-500";
+  return (
+    <div>
+      <div className="flex justify-between mb-0.5">
+        <span className="text-gray-600 dark:text-gray-400">{label}</span>
+        <span className="font-mono text-gray-800 dark:text-gray-200">{pct}%</span>
+      </div>
+      <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div className={`h-full ${bgColor} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+      {extra && <p className="text-gray-400 dark:text-gray-500 mt-0.5">{extra}</p>}
+    </div>
+  );
 }
 
 export function DailyRoutes() {
@@ -216,6 +241,29 @@ export function DailyRoutes() {
         </div>
       </div>
 
+      {/* Algorithm info */}
+      {data && data.algorithm && (
+        <div className="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg p-4 border border-indigo-200 dark:border-indigo-800">
+          <div className="flex items-center gap-2 mb-2">
+            <Brain className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            <span className="font-medium text-indigo-800 dark:text-indigo-200">ML-алгоритм распределения</span>
+          </div>
+          <p className="text-sm text-indigo-700 dark:text-indigo-300 mb-2">
+            cost = w<sub>eta</sub>·gap + w<sub>deadhead</sub>·deadhead + w<sub>reject</sub>·(1-AR) + w<sub>cancel</sub>·CR + w<sub>fairness</sub>·fairness + w<sub>quality</sub>·quality
+          </p>
+          <div className="flex flex-wrap gap-3 text-xs text-indigo-600 dark:text-indigo-400">
+            <span>Конфиг: <strong>{data.config.name}</strong></span>
+            <span>|</span>
+            <span>Окно: <strong>{(data.config.w_eta * 100).toFixed(0)}%</strong></span>
+            <span>Пробег: <strong>{(data.config.w_deadhead * 100).toFixed(0)}%</strong></span>
+            <span>Отказ: <strong>{(data.config.w_reject * 100).toFixed(0)}%</strong></span>
+            <span>Отмена: <strong>{(data.config.w_cancel * 100).toFixed(0)}%</strong></span>
+            <span>Баланс: <strong>{(data.config.w_fairness * 100).toFixed(0)}%</strong></span>
+            <span>Качество: <strong>{(data.config.w_quality * 100).toFixed(0)}%</strong></span>
+          </div>
+        </div>
+      )}
+
       {/* Stats */}
       {data && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -354,6 +402,29 @@ export function DailyRoutes() {
                               <span>₸{order.estimated_price}</span>
                             )}
                           </div>
+                          {/* ML Score details */}
+                          {(() => {
+                            const scoreData = route.scores?.find((s) => s.order_id === order.id);
+                            if (!scoreData) return null;
+                            return (
+                              <div className="mt-2 p-2 bg-indigo-50 dark:bg-indigo-900/20 rounded-md border border-indigo-100 dark:border-indigo-800">
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <Brain className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+                                  <span className="text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                                    ML Score: {scoreData.cost.toFixed(4)}
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-3 md:grid-cols-6 gap-1 text-[10px]">
+                                  <ScoreBar label="Окно" value={scoreData.gap_norm} color="blue" extra={`${scoreData.gap_min} мин`} />
+                                  <ScoreBar label="Пробег" value={scoreData.deadhead_norm} color="amber" extra={`${scoreData.deadhead_km} км`} />
+                                  <ScoreBar label="Отказ" value={scoreData.reject_norm} color="red" extra={`AR: ${(scoreData.acceptance_rate * 100).toFixed(0)}%`} />
+                                  <ScoreBar label="Отмена" value={scoreData.cancel_norm} color="orange" extra={`CR: ${(scoreData.cancel_rate * 100).toFixed(0)}%`} />
+                                  <ScoreBar label="Баланс" value={scoreData.fairness_norm} color="green" extra={`${scoreData.orders_so_far} зак.`} />
+                                  <ScoreBar label="Качество" value={scoreData.quality_norm} color="purple" extra={`★${scoreData.rating}`} />
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     ))}

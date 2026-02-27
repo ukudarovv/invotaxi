@@ -140,15 +140,53 @@ export interface DailyRouteDriver {
   capacity: number;
 }
 
+export interface MLScoreDetails {
+  cost: number;
+  gap_min: number;
+  gap_norm: number;
+  deadhead_km: number;
+  deadhead_norm: number;
+  reject_norm: number;
+  cancel_norm: number;
+  fairness_norm: number;
+  zone_norm: number;
+  quality_norm: number;
+  acceptance_rate: number;
+  cancel_rate: number;
+  rating: number;
+  orders_so_far: number;
+  weights: {
+    w_eta: number;
+    w_deadhead: number;
+    w_reject: number;
+    w_cancel: number;
+    w_fairness: number;
+    w_zone: number;
+    w_quality: number;
+  };
+}
+
 export interface DailyRoute {
   driver: DailyRouteDriver;
   orders: DailyRouteOrder[];
+  scores: Array<{ order_id: string } & MLScoreDetails>;
   total_orders: number;
   total_distance_km: number;
 }
 
 export interface DailyRoutesResponse {
   date: string;
+  algorithm: string;
+  config: {
+    name: string;
+    w_eta: number;
+    w_deadhead: number;
+    w_reject: number;
+    w_cancel: number;
+    w_fairness: number;
+    w_zone: number;
+    w_quality: number;
+  };
   total_orders: number;
   unassigned_count: number;
   already_assigned_count: number;
@@ -156,6 +194,13 @@ export interface DailyRoutesResponse {
   failed_count: number;
   drivers_count: number;
   routes: DailyRoute[];
+  assignments: Array<{
+    order_id: string;
+    driver_id: number;
+    driver_name: string;
+    ml_cost: number;
+    ml_details: MLScoreDetails;
+  }>;
   unassigned_orders: Array<{ id: string; reason: string }>;
   auto_assigned: boolean;
 }

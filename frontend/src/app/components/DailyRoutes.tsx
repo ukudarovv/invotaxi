@@ -136,29 +136,34 @@ export function DailyRoutes() {
 
     const colors = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
-    if (selectedRoute) {
-      drawRoute(selectedRoute, colors[0]);
-    } else {
-      data.routes.forEach((route, i) => {
-        drawRoute(route, colors[i % colors.length]);
-      });
-    }
+    const drawAll = async () => {
+      if (selectedRoute) {
+        await drawRoute(selectedRoute, colors[0]);
+      } else {
+        for (let i = 0; i < data.routes.length; i++) {
+          await drawRoute(data.routes[i], colors[i % colors.length]);
+        }
+      }
 
-    if (allOrders.length > 1) {
-      const lats = allOrders.flatMap((o) => [o.pickup_lat, o.dropoff_lat]);
-      const lons = allOrders.flatMap((o) => [o.pickup_lon, o.dropoff_lon]);
-      mapInstanceRef.current.setBounds(
-        [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]],
-        { checkZoomRange: true, zoomMargin: 40 }
-      );
-    }
+      if (allOrders.length > 1 && mapInstanceRef.current) {
+        const lats = allOrders.flatMap((o) => [o.pickup_lat, o.dropoff_lat]);
+        const lons = allOrders.flatMap((o) => [o.pickup_lon, o.dropoff_lon]);
+        mapInstanceRef.current.setBounds(
+          [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]],
+          { checkZoomRange: true, zoomMargin: 40 }
+        );
+      }
+    };
+    drawAll();
   }, [ymapsReady, data, expandedDriver]);
 
-  const drawRoute = (route: DailyRoute, color: string) => {
+  const drawRoute = async (route: DailyRoute, color: string) => {
     if (!mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
 
-    route.orders.forEach((order, idx) => {
+    for (let idx = 0; idx < route.orders.length; idx++) {
+      const order = route.orders[idx];
+
       const pickupPm = new ymaps.Placemark(
         [order.pickup_lat, order.pickup_lon],
         {
@@ -182,25 +187,55 @@ export function DailyRoutes() {
       map.geoObjects.add(dropoffPm);
       geoObjectsRef.current.push(dropoffPm);
 
-      const line = new ymaps.Polyline(
-        [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
-        {},
-        { strokeColor: color, strokeWidth: 3, opacity: 0.8 }
-      );
-      map.geoObjects.add(line);
-      geoObjectsRef.current.push(line);
+      // Маршрут по дорогам (pickup → dropoff)
+      try {
+        const multiRoute = await ymaps.route(
+          [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
+          { mapStateAutoApply: false }
+        ) as any;
+        const paths = multiRoute.getPaths();
+        for (let p = 0; p < paths.getLength(); p++) {
+          const path = paths.get(p);
+          path.options.set({ strokeColor: color, strokeWidth: 4, opacity: 0.85 });
+        }
+        map.geoObjects.add(multiRoute);
+        geoObjectsRef.current.push(multiRoute);
+      } catch {
+        const line = new ymaps.Polyline(
+          [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
+          {},
+          { strokeColor: color, strokeWidth: 3, opacity: 0.8 }
+        );
+        map.geoObjects.add(line);
+        geoObjectsRef.current.push(line);
+      }
 
+      // Холостой пробег по дорогам (предыдущий dropoff → текущий pickup)
       if (idx > 0) {
         const prev = route.orders[idx - 1];
-        const deadhead = new ymaps.Polyline(
-          [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
-          {},
-          { strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 }
-        );
-        map.geoObjects.add(deadhead);
-        geoObjectsRef.current.push(deadhead);
+        try {
+          const deadheadRoute = await ymaps.route(
+            [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
+            { mapStateAutoApply: false }
+          ) as any;
+          const dPaths = deadheadRoute.getPaths();
+          for (let p = 0; p < dPaths.getLength(); p++) {
+            const path = dPaths.get(p);
+            path.options.set({ strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 });
+          }
+          map.geoObjects.add(deadheadRoute);
+          geoObjectsRef.current.push(deadheadRoute);
+        } catch {
+          const deadhead = new ymaps.Polyline(
+            [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
+            {},
+            { strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 }
+          );
+          map.geoObjects.add(deadhead);
+          geoObjectsRef.current.push(deadhead);
+        }
       }
-    });
+    }
   };
 
   useEffect(() => {

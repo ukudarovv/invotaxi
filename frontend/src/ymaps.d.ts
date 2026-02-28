@@ -11,6 +11,11 @@ declare namespace ymaps {
     options?: { boundedBy?: number[][]; results?: number }
   ): Promise<Array<{ displayName: string; value: string; hl?: number[][] }>>;
 
+  function route(
+    points: number[][] | string[],
+    options?: { mapStateAutoApply?: boolean; multiRoute?: boolean; routingMode?: string }
+  ): Promise<any>;
+
   class Map {
     constructor(
       element: HTMLElement | string,

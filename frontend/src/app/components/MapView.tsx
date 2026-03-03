@@ -1,14 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-
-// Fix for default marker icon
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
 
 interface MapViewProps {
   center: [number, number];
@@ -19,88 +9,70 @@ interface MapViewProps {
   onMarkerPositionChange?: (lat: number, lon: number) => void;
 }
 
-export function MapView({ 
-  center, 
-  zoom = 13, 
-  markerPosition, 
+export function MapView({
+  center,
+  zoom = 13,
+  markerPosition,
   popupContent,
   draggable = false,
-  onMarkerPositionChange
+  onMarkerPositionChange,
 }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const markerRef = useRef<L.Marker | null>(null);
-  const [currentPosition, setCurrentPosition] = useState<[number, number] | null>(
-    markerPosition || null
-  );
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const markerRef = useRef<ymaps.Placemark | null>(null);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!mapRef.current) return;
+    ymaps.ready(() => setReady(true));
+  }, []);
 
-    // Initialize map only once
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+
     if (!mapInstanceRef.current) {
-      mapInstanceRef.current = L.map(mapRef.current).setView(center, zoom);
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      }).addTo(mapInstanceRef.current);
+      mapInstanceRef.current = new ymaps.Map(mapRef.current, {
+        center: [center[0], center[1]],
+        zoom,
+        controls: ["zoomControl"],
+      });
+    } else {
+      mapInstanceRef.current.setCenter([center[0], center[1]], zoom);
     }
-
-    // Update map view if center changes
-    if (mapInstanceRef.current && center) {
-      mapInstanceRef.current.setView(center, zoom);
-    }
-  }, [center, zoom]);
+  }, [ready, center, zoom]);
 
   useEffect(() => {
-    if (!mapInstanceRef.current) return;
+    if (!ready || !mapInstanceRef.current) return;
 
     const position = markerPosition || center;
-    
-    // Remove old marker if exists
+
     if (markerRef.current) {
-      mapInstanceRef.current.removeLayer(markerRef.current);
+      mapInstanceRef.current.geoObjects.remove(markerRef.current);
       markerRef.current = null;
     }
 
-    // Add new marker
     if (position) {
-      const marker = L.marker(position, {
-        draggable: draggable
-      }).addTo(mapInstanceRef.current);
-      
-      if (popupContent) {
-        marker.bindPopup(popupContent);
-      }
+      const placemark = new ymaps.Placemark(
+        [position[0], position[1]],
+        { balloonContent: popupContent || "" },
+        { draggable, preset: "islands#blueCircleDotIcon" }
+      );
 
-      // Handle marker drag
       if (draggable && onMarkerPositionChange) {
-        marker.on('dragend', (e) => {
-          const newPos = marker.getLatLng();
-          const newPosition: [number, number] = [newPos.lat, newPos.lng];
-          setCurrentPosition(newPosition);
-          onMarkerPositionChange(newPos.lat, newPos.lng);
+        placemark.events.add("dragend", () => {
+          const coords = placemark.geometry.getCoordinates();
+          onMarkerPositionChange(coords[0], coords[1]);
         });
       }
 
-      markerRef.current = marker;
-      setCurrentPosition(position);
+      mapInstanceRef.current.geoObjects.add(placemark);
+      markerRef.current = placemark;
     }
+  }, [ready, markerPosition, popupContent, draggable, onMarkerPositionChange, center]);
 
-    // Clean up marker on unmount
-    return () => {
-      if (markerRef.current && mapInstanceRef.current) {
-        mapInstanceRef.current.removeLayer(markerRef.current);
-        markerRef.current = null;
-      }
-    };
-  }, [markerPosition, popupContent, draggable, onMarkerPositionChange, center]);
-
-  // Cleanup map on unmount
   useEffect(() => {
     return () => {
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        mapInstanceRef.current.destroy();
         mapInstanceRef.current = null;
       }
     };

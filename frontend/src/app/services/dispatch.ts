@@ -112,6 +112,99 @@ export interface HeatmapResponse {
   points: HeatmapDataPoint[];
 }
 
+export interface DailyRouteOrder {
+  id: string;
+  pickup_title: string;
+  dropoff_title: string;
+  pickup_lat: number;
+  pickup_lon: number;
+  dropoff_lat: number;
+  dropoff_lon: number;
+  desired_pickup_time: string | null;
+  status: string;
+  passenger_name: string | null;
+  has_companion: boolean;
+  seats_needed: number;
+  estimated_price: string | null;
+  distance_km: number | null;
+  note: string | null;
+}
+
+export interface DailyRouteDriver {
+  id: number;
+  name: string;
+  car_model: string;
+  plate_number: string;
+  phone: string | null;
+  region: string | null;
+  capacity: number;
+}
+
+export interface MLScoreDetails {
+  cost: number;
+  gap_min: number;
+  gap_norm: number;
+  deadhead_km: number;
+  deadhead_norm: number;
+  reject_norm: number;
+  cancel_norm: number;
+  fairness_norm: number;
+  zone_norm: number;
+  quality_norm: number;
+  acceptance_rate: number;
+  cancel_rate: number;
+  rating: number;
+  orders_so_far: number;
+  weights: {
+    w_eta: number;
+    w_deadhead: number;
+    w_reject: number;
+    w_cancel: number;
+    w_fairness: number;
+    w_zone: number;
+    w_quality: number;
+  };
+}
+
+export interface DailyRoute {
+  driver: DailyRouteDriver;
+  orders: DailyRouteOrder[];
+  scores: Array<{ order_id: string } & MLScoreDetails>;
+  total_orders: number;
+  total_distance_km: number;
+}
+
+export interface DailyRoutesResponse {
+  date: string;
+  algorithm: string;
+  config: {
+    name: string;
+    w_eta: number;
+    w_deadhead: number;
+    w_reject: number;
+    w_cancel: number;
+    w_fairness: number;
+    w_zone: number;
+    w_quality: number;
+  };
+  total_orders: number;
+  unassigned_count: number;
+  already_assigned_count: number;
+  distributed_count: number;
+  failed_count: number;
+  drivers_count: number;
+  routes: DailyRoute[];
+  assignments: Array<{
+    order_id: string;
+    driver_id: number;
+    driver_name: string;
+    ml_cost: number;
+    ml_details: MLScoreDetails;
+  }>;
+  unassigned_orders: Array<{ id: string; reason: string }>;
+  auto_assigned: boolean;
+}
+
 export const dispatchApi = {
   /**
    * Получить кандидатов для заказа
@@ -203,6 +296,26 @@ export const dispatchApi = {
    */
   async getHeatmapData(): Promise<HeatmapResponse> {
     const response = await api.get<HeatmapResponse>('/dispatch/heatmap/');
+    return response.data;
+  },
+
+  /**
+   * Получить предварительное распределение заказов на день (GET)
+   */
+  async getDailyRoutes(date?: string): Promise<DailyRoutesResponse> {
+    const params = date ? { date } : {};
+    const response = await api.get<DailyRoutesResponse>('/dispatch/daily-routes/', { params });
+    return response.data;
+  },
+
+  /**
+   * Применить распределение заказов на день (POST)
+   */
+  async applyDailyRoutes(date?: string): Promise<DailyRoutesResponse> {
+    const data = date ? { date } : {};
+    const response = await api.post<DailyRoutesResponse>('/dispatch/daily-routes/', data, {
+      params: date ? { date } : {},
+    });
     return response.data;
   },
 };

@@ -8,18 +8,7 @@ import { driversApi, Driver } from "../services/drivers";
 import { regionsApi, Region, City } from "../services/regions";
 import { toast } from "sonner";
 import { getDispatchMapWebSocket } from "../services/websocket";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-// Импортируем leaflet.markercluster
-import "leaflet.markercluster";
-
-// Fix for default marker icon
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+// Yandex Maps is loaded globally via index.html
 
 export function Dispatch() {
   const [queueOrdersData, setQueueOrdersData] = useState<Order[]>([]);
@@ -1085,31 +1074,33 @@ export function Dispatch() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
-                  const map = document.querySelector('.leaflet-container') as any;
-                  if (map && map._leaflet_id) {
-                    // Автомасштабирование к видимым объектам
-                    const bounds = L.latLngBounds([]);
-                    const allOrders = [...filteredQueueOrders, ...activeOrdersData];
-                    const filteredDrivers = allDrivers.filter(d => {
-                      if (mapDriverStatusFilter === "online") return d.is_online && d.current_lat && d.current_lon;
-                      if (mapDriverStatusFilter === "offline") return !d.is_online && d.current_lat && d.current_lon;
-                      return d.current_lat && d.current_lon;
-                    });
-                    
-                    allOrders.forEach(o => {
-                      if (o.pickup_lat && o.pickup_lon) bounds.extend([o.pickup_lat, o.pickup_lon]);
-                    });
-                    filteredDrivers.forEach(d => {
-                      if (d.current_lat && d.current_lon) bounds.extend([d.current_lat, d.current_lon]);
-                    });
-                    
-                    if (!bounds.isValid()) return;
-                    
-                    const mapInstance = (window as any).__mapInstance;
-                    if (mapInstance) {
-                      mapInstance.fitBounds(bounds, { padding: [50, 50] });
-                    }
-                  }
+                  const mapInstance = (window as any).__mapInstance as ymaps.Map | undefined;
+                  if (!mapInstance) return;
+
+                  const allOrders = [...filteredQueueOrders, ...activeOrdersData];
+                  const filteredDrivers = allDrivers.filter(d => {
+                    if (mapDriverStatusFilter === "online") return d.is_online && d.current_lat && d.current_lon;
+                    if (mapDriverStatusFilter === "offline") return !d.is_online && d.current_lat && d.current_lon;
+                    return d.current_lat && d.current_lon;
+                  });
+
+                  const points: number[][] = [];
+                  allOrders.forEach(o => {
+                    if (o.pickup_lat && o.pickup_lon) points.push([o.pickup_lat, o.pickup_lon]);
+                  });
+                  filteredDrivers.forEach(d => {
+                    if (d.current_lat && d.current_lon) points.push([d.current_lat!, d.current_lon!]);
+                  });
+
+                  if (points.length === 0) return;
+
+                  const lats = points.map(p => p[0]);
+                  const lons = points.map(p => p[1]);
+                  const bounds: number[][] = [
+                    [Math.min(...lats), Math.min(...lons)],
+                    [Math.max(...lats), Math.max(...lons)],
+                  ];
+                  mapInstance.setBounds(bounds, { checkZoomRange: true, zoomMargin: 50 });
                 }}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm flex items-center gap-2"
               >
@@ -1793,6 +1784,7 @@ interface DispatchMapProps {
   showHeatmap?: boolean;
 }
 
+
 // Функция для генерации уникального цвета на основе ID заказа
 function getOrderColor(orderId: string): string {
   // Генерируем цвет на основе хеша ID заказа
@@ -1819,119 +1811,6 @@ function getOrderNumber(orderId: string): string {
   }
   // Если нет цифр, используем первые символы
   return orderId.slice(-4).toUpperCase();
-}
-
-// Функция для создания кастомной SVG иконки заказа с галочкой
-function createOrderIcon(orderId: string, status: string, color?: string): L.DivIcon {
-  // Используем переданный цвет или генерируем уникальный
-  const iconColor = color || getOrderColor(orderId);
-  const orderNumber = getOrderNumber(orderId);
-  
-  // Определяем стиль галочки в зависимости от статуса
-  const isCompleted = ['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'].includes(status);
-  const isPending = ['active_queue', 'submitted', 'awaiting_dispatcher_decision'].includes(status);
-  
-  // SVG галочка
-  const checkmarkSvg = `
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z" fill="white" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </svg>
-  `;
-  
-  // SVG часы для ожидающих заказов
-  const clockSvg = `
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="12" cy="12" r="10" stroke="white" stroke-width="2" fill="none"/>
-      <path d="M12 6v6l4 2" stroke="white" stroke-width="2" stroke-linecap="round"/>
-    </svg>
-  `;
-  
-  const iconSvg = isCompleted ? checkmarkSvg : clockSvg;
-  
-  return L.divIcon({
-    className: 'custom-order-icon',
-    html: `
-      <div style="
-        position: relative;
-        width: 48px;
-        height: 48px;
-        border-radius: 50%;
-        background: ${iconColor};
-        border: 3px solid white;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.4);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: transform 0.2s ease;
-      ">
-        ${iconSvg}
-        <div style="
-          position: absolute;
-          bottom: -2px;
-          right: -2px;
-          width: 20px;
-          height: 20px;
-          border-radius: 50%;
-          background: white;
-          border: 2px solid ${iconColor};
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 10px;
-          font-weight: bold;
-          color: ${iconColor};
-          box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-        ">
-          ${orderNumber}
-        </div>
-      </div>
-    `,
-    iconSize: [48, 48],
-    iconAnchor: [24, 24],
-    popupAnchor: [0, -24],
-  });
-}
-
-// Функция для создания кастомной SVG иконки водителя
-function createDriverIcon(isOnline: boolean, hasActiveOrder: boolean, bearing?: number): L.DivIcon {
-  let bgColor = '#10b981'; // зеленый для онлайн
-  let emoji = '🚗';
-  
-  if (!isOnline) {
-    bgColor = '#6b7280'; // серый для оффлайн
-    emoji = '🚫';
-  } else if (hasActiveOrder) {
-    bgColor = '#ef4444'; // красный для на заказе
-    emoji = '🚕';
-  }
-  
-  // Поворот иконки по направлению движения (если указан bearing)
-  const rotation = bearing !== undefined ? `transform: rotate(${bearing}deg);` : '';
-  
-  return L.divIcon({
-    className: 'custom-driver-icon',
-    html: `
-      <div style="
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background: ${bgColor};
-        border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 18px;
-        transition: transform 0.3s ease;
-        ${rotation}
-      ">
-        ${emoji}
-      </div>
-    `,
-    iconSize: [36, 36],
-    iconAnchor: [18, 18],
-    popupAnchor: [0, -18],
-  });
 }
 
 // Компонент легенды карты
@@ -1993,95 +1872,33 @@ function MapLegend() {
   );
 }
 
-// Функция для плавной анимации перемещения маркера
-function animateMarker(marker: L.Marker, newPos: [number, number], duration: number = 1000): void {
-  const startPos = marker.getLatLng();
-  const startTime = Date.now();
-  
-  const animate = () => {
-    const elapsed = Date.now() - startTime;
-    const progress = Math.min(elapsed / duration, 1);
-    
-    // Используем easing функцию для плавности
-    const easeProgress = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-    
-    const lat = startPos.lat + (newPos[0] - startPos.lat) * easeProgress;
-    const lng = startPos.lng + (newPos[1] - startPos.lng) * easeProgress;
-    
-    marker.setLatLng([lat, lng]);
-    
-    if (progress < 1) {
-      requestAnimationFrame(animate);
-    }
-  };
-  
-  requestAnimationFrame(animate);
-}
-
-// Функция для визуальной индикации обновления маркера
-function highlightMarker(marker: L.Marker, duration: number = 500): void {
-  const element = marker.getElement();
-  if (!element) return;
-  
-  // Добавляем класс для подсветки
-  element.style.transition = `transform ${duration}ms ease-in-out`;
-  element.style.transform = 'scale(1.3)';
-  element.style.zIndex = '1000';
-  
-  setTimeout(() => {
-    if (element) {
-      element.style.transform = 'scale(1)';
-      setTimeout(() => {
-        if (element) {
-          element.style.zIndex = '';
-        }
-      }, duration);
-    }
-  }, duration);
-}
-
 function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders = true, showDrivers = true, showRoutes = true, cities = [], regions = [], showCities = true, showRegions = true, showHeatmap = false }: DispatchMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<L.Map | null>(null);
-  const orderMarkersRef = useRef<Map<string, L.Marker>>(new Map());
-  const driverMarkersRef = useRef<Map<string, L.Marker>>(new Map());
-  const driverRoutesRef = useRef<Map<string, L.Polyline>>(new Map());
-  const orderRoutesRef = useRef<Map<string, L.Polyline>>(new Map());
-  const routeCacheRef = useRef<Map<string, any>>(new Map());
-  const orderClusterRef = useRef<L.MarkerClusterGroup | null>(null);
-  const driverClusterRef = useRef<L.MarkerClusterGroup | null>(null);
-  const cityMarkersRef = useRef<Map<string, L.Marker>>(new Map());
-  const regionLayersRef = useRef<Map<string, L.Layer>>(new Map());
-  const heatmapLayersRef = useRef<L.CircleMarker[]>([]);
+  const mapInstanceRef = useRef<ymaps.Map | null>(null);
+  const orderMarkersRef = useRef<Map<string, ymaps.Placemark>>(new window.Map());
+  const driverMarkersRef = useRef<Map<string, ymaps.Placemark>>(new window.Map());
+  const driverRoutesRef = useRef<Map<string, ymaps.Polyline>>(new window.Map());
+  const orderRoutesRef = useRef<Map<string, ymaps.Polyline>>(new window.Map());
+  const routeCacheRef = useRef<Map<string, any>>(new window.Map());
+  const cityMarkersRef = useRef<Map<string, ymaps.Placemark>>(new window.Map());
+  const regionLayersRef = useRef<Map<string, any>>(new window.Map());
+  const heatmapLayersRef = useRef<any[]>([]);
+  const [ymapsReady, setYmapsReady] = useState(false);
   const previousDataRef = useRef<{ orders: Set<string>, activeOrders: Set<string>, drivers: Set<string> }>({
     orders: new Set(),
     activeOrders: new Set(),
     drivers: new Set(),
   });
 
+  // Инициализация Yandex Maps API
+  useEffect(() => {
+    ymaps.ready(() => setYmapsReady(true));
+  }, []);
+
   // Инициализация карты
   useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
+    if (!ymapsReady || !mapRef.current || mapInstanceRef.current) return;
 
-    // Добавляем CSS стили для кластеров вручную, если они еще не добавлены
-    if (!document.getElementById('leaflet-markercluster-styles')) {
-      const style = document.createElement('style');
-      style.id = 'leaflet-markercluster-styles';
-      style.textContent = `
-        .marker-cluster-small { background-color: rgba(181, 226, 140, 0.6); }
-        .marker-cluster-small div { background-color: rgba(110, 204, 57, 0.6); }
-        .marker-cluster-medium { background-color: rgba(241, 211, 87, 0.6); }
-        .marker-cluster-medium div { background-color: rgba(240, 194, 12, 0.6); }
-        .marker-cluster-large { background-color: rgba(253, 156, 115, 0.6); }
-        .marker-cluster-large div { background-color: rgba(241, 128, 23, 0.6); }
-        .marker-cluster { background-clip: padding-box; border-radius: 20px; }
-        .marker-cluster div { width: 30px; height: 30px; margin-left: 5px; margin-top: 5px; text-align: center; border-radius: 15px; font: 12px "Helvetica Neue", Arial, Helvetica, sans-serif; }
-        .marker-cluster span { line-height: 30px; }
-      `;
-      document.head.appendChild(style);
-    }
-
-    // Центр карты - средняя точка всех заказов или по умолчанию
     const allOrders = [...orders, ...activeOrders];
     const centerLat = allOrders.length > 0
       ? allOrders.reduce((sum, o) => sum + o.pickup_lat, 0) / allOrders.length
@@ -2090,83 +1907,12 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       ? allOrders.reduce((sum, o) => sum + o.pickup_lon, 0) / allOrders.length
       : 37.6173;
 
-    mapInstanceRef.current = L.map(mapRef.current).setView([centerLat, centerLon], 12);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(mapInstanceRef.current);
-
-    // Инициализируем кластеры с улучшенными настройками
-    orderClusterRef.current = (L as any).markerClusterGroup({
-      maxClusterRadius: 80,
-      spiderfyOnMaxZoom: true,
-      showCoverageOnHover: true,
-      zoomToBoundsOnClick: true,
-      disableClusteringAtZoom: 15,
-      chunkedLoading: true,
-      iconCreateFunction: (cluster: any) => {
-        const count = cluster.getChildCount();
-        let size = 'small';
-        if (count > 50) size = 'large';
-        else if (count > 10) size = 'medium';
-        
-        return L.divIcon({
-          html: `<div style="
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: ${size === 'large' ? '#f97316' : size === 'medium' ? '#fbbf24' : '#10b981'};
-            border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-          ">${count}</div>`,
-          className: 'marker-cluster-custom',
-          iconSize: [40, 40],
-        });
-      }
+    mapInstanceRef.current = new ymaps.Map(mapRef.current, {
+      center: [centerLat, centerLon],
+      zoom: 12,
+      controls: ['zoomControl', 'typeSelector'],
     });
-    orderClusterRef.current.addTo(mapInstanceRef.current);
-
-    driverClusterRef.current = (L as any).markerClusterGroup({
-      maxClusterRadius: 80,
-      spiderfyOnMaxZoom: true,
-      showCoverageOnHover: true,
-      zoomToBoundsOnClick: true,
-      disableClusteringAtZoom: 15,
-      chunkedLoading: true,
-      iconCreateFunction: (cluster: any) => {
-        const count = cluster.getChildCount();
-        let size = 'small';
-        if (count > 30) size = 'large';
-        else if (count > 10) size = 'medium';
-        
-        return L.divIcon({
-          html: `<div style="
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: ${size === 'large' ? '#3b82f6' : size === 'medium' ? '#60a5fa' : '#93c5fd'};
-            border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-          ">${count}</div>`,
-          className: 'marker-cluster-custom',
-          iconSize: [40, 40],
-        });
-      }
-    });
-    driverClusterRef.current.addTo(mapInstanceRef.current);
-  }, []);
+  }, [ymapsReady]);
 
   // Сохраняем ссылку на карту в window для доступа извне
   useEffect(() => {
@@ -2175,17 +1921,24 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     }
   }, [mapInstanceRef.current]);
 
+  // Обработчик кастомного события orderClick из balloon content
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        onOrderClick(detail);
+      }
+    };
+    window.addEventListener('orderClick', handler);
+    return () => window.removeEventListener('orderClick', handler);
+  }, [onOrderClick]);
+
   // Обновление маркеров заказов
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     if (!showOrders) {
-      // Скрываем все маркеры заказов
       orderMarkersRef.current.forEach(marker => {
-        if (orderClusterRef.current) {
-          orderClusterRef.current.removeLayer(marker);
-        } else {
-          marker.remove();
-        }
+        mapInstanceRef.current!.geoObjects.remove(marker);
       });
       return;
     }
@@ -2193,7 +1946,6 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     const currentOrderIds = new Set<string>();
     const allOrders = [...orders, ...activeOrders];
 
-    // Обновляем или создаем маркеры для заказов
     allOrders.forEach(order => {
       const orderId = String(order.id);
       currentOrderIds.add(orderId);
@@ -2201,187 +1953,89 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       const existingMarker = orderMarkersRef.current.get(orderId);
       const isActiveOrder = activeOrders.some(o => String(o.id) === orderId);
       
-      // Создаем уникальную иконку для каждого заказа с галочкой
-      const customIcon = createOrderIcon(orderId, order.status);
+      const isCompleted = ['assigned', 'driver_en_route', 'arrived_waiting', 'ride_ongoing'].includes(order.status);
+      const preset = isCompleted ? 'islands#greenCircleDotIcon' : 'islands#orangeCircleDotIcon';
+
+      const statusLabels: Record<string, string> = {
+        'active_queue': 'В очереди',
+        'submitted': 'Отправлен',
+        'awaiting_dispatcher_decision': 'Ожидает решения',
+        'assigned': 'Назначен',
+        'driver_en_route': 'Водитель в пути',
+        'arrived_waiting': 'Водитель прибыл',
+        'ride_ongoing': 'Поездка началась',
+      };
+      const statusLabel = statusLabels[order.status] || order.status;
+      
+      const waitTime = order.created_at 
+        ? Math.round((Date.now() - new Date(order.created_at).getTime()) / 1000 / 60)
+        : 0;
+      const waitTimeText = waitTime > 60 
+        ? `${Math.floor(waitTime / 60)} ч ${waitTime % 60} мин`
+        : `${waitTime} мин`;
+      const waitTimeColor = waitTime > 30 ? '#ef4444' : waitTime > 15 ? '#f97316' : '#10b981';
+
+      const balloonContent = isActiveOrder
+        ? `
+          <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+              <span style="display: inline-block; padding: 4px 8px; background: #3b82f6; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
+            </div>
+            <div style="margin-bottom: 8px; padding: 8px; background: #f3f4f6; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+              <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
+              ${order.driver?.car_model ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Машина: ${order.driver.car_model}</p>` : ''}
+            </div>
+            ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+            ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+            ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                      style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                📋 Просмотреть детали
+              </button>
+            </div>
+          </div>
+        `
+        : `
+          <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
+            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
+              <span style="display: inline-block; padding: 4px 8px; background: #f59e0b; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
+            </div>
+            <div style="margin-bottom: 8px; padding: 8px; background: #fef3c7; border-radius: 6px;">
+              <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
+              <p style="margin: 4px 0; font-size: 12px; color: ${waitTimeColor};"><strong>⏱️ Ожидание:</strong> ${waitTimeText}</p>
+            </div>
+            ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
+            ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
+            ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
+            ${order.seats_needed > 1 ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">💺 Мест: ${order.seats_needed}</p>` : ''}
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+              <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
+                      style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;">
+                📋 Просмотреть детали
+              </button>
+            </div>
+          </div>
+        `;
 
       if (existingMarker) {
-        // Обновляем существующий маркер
-        const currentPos = existingMarker.getLatLng();
-        const newPos: [number, number] = [order.pickup_lat, order.pickup_lon];
-        let wasUpdated = false;
-        
-        // Обновляем позицию только если она изменилась
-        if (Math.abs(currentPos.lat - newPos[0]) > 0.0001 || Math.abs(currentPos.lng - newPos[1]) > 0.0001) {
-          animateMarker(existingMarker, newPos, 500);
-          wasUpdated = true;
-        }
-
-        // Обновляем иконку если статус изменился
-        const currentIcon = existingMarker.options.icon;
-        if (!currentIcon || (currentIcon as L.DivIcon).options.html !== customIcon.options.html) {
-          existingMarker.setIcon(customIcon);
-          wasUpdated = true;
-        }
-
-        // Визуальная индикация обновления
-        if (wasUpdated) {
-          highlightMarker(existingMarker);
-        }
-
-        // Обновляем popup с расширенной информацией
-        const statusLabels: Record<string, string> = {
-          'active_queue': 'В очереди',
-          'submitted': 'Отправлен',
-          'awaiting_dispatcher_decision': 'Ожидает решения',
-          'assigned': 'Назначен',
-          'driver_en_route': 'Водитель в пути',
-          'arrived_waiting': 'Водитель прибыл',
-          'ride_ongoing': 'Поездка началась',
-        };
-        const statusLabel = statusLabels[order.status] || order.status;
-        
-        // Вычисляем время ожидания
-        const waitTime = order.created_at 
-          ? Math.round((Date.now() - new Date(order.created_at).getTime()) / 1000 / 60)
-          : 0;
-        const waitTimeText = waitTime > 60 
-          ? `${Math.floor(waitTime / 60)} ч ${waitTime % 60} мин`
-          : `${waitTime} мин`;
-        
-        const waitTimeColor = waitTime > 30 ? '#ef4444' : waitTime > 15 ? '#f97316' : '#10b981';
-        
-        const popupContent = isActiveOrder
-          ? `
-            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
-              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
-                <span style="display: inline-block; padding: 4px 8px; background: #3b82f6; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
-              </div>
-              <div style="margin-bottom: 8px; padding: 8px; background: #f3f4f6; border-radius: 6px;">
-                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
-                ${order.driver?.car_model ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Машина: ${order.driver.car_model}</p>` : ''}
-              </div>
-              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
-              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
-              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
-              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
-                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
-                  📋 Просмотреть детали
-                </button>
-              </div>
-            </div>
-          `
-          : `
-            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
-              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
-                <span style="display: inline-block; padding: 4px 8px; background: #f59e0b; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
-              </div>
-              <div style="margin-bottom: 8px; padding: 8px; background: #fef3c7; border-radius: 6px;">
-                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 4px 0; font-size: 12px; color: ${waitTimeColor};"><strong>⏱️ Ожидание:</strong> ${waitTimeText}</p>
-              </div>
-              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
-              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
-              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
-              ${order.seats_needed > 1 ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">💺 Мест: ${order.seats_needed}</p>` : ''}
-              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
-                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
-                  📋 Просмотреть детали
-                </button>
-              </div>
-            </div>
-          `;
-        existingMarker.setPopupContent(popupContent);
+        existingMarker.geometry.setCoordinates([order.pickup_lat, order.pickup_lon]);
+        existingMarker.properties.set({ balloonContent });
+        existingMarker.options.set('preset', preset);
       } else {
-        // Создаем новый маркер с кастомной иконкой
-        const marker = L.marker([order.pickup_lat, order.pickup_lon], {
-          icon: customIcon
-        });
-
-        const statusLabels: Record<string, string> = {
-          'active_queue': 'В очереди',
-          'submitted': 'Отправлен',
-          'awaiting_dispatcher_decision': 'Ожидает решения',
-          'assigned': 'Назначен',
-          'driver_en_route': 'Водитель в пути',
-          'arrived_waiting': 'Водитель прибыл',
-          'ride_ongoing': 'Поездка началась',
-        };
-        const statusLabel = statusLabels[order.status] || order.status;
-        
-        // Вычисляем время ожидания
-        const waitTime = order.created_at 
-          ? Math.round((Date.now() - new Date(order.created_at).getTime()) / 1000 / 60)
-          : 0;
-        const waitTimeText = waitTime > 60 
-          ? `${Math.floor(waitTime / 60)} ч ${waitTime % 60} мин`
-          : `${waitTime} мин`;
-        
-        const waitTimeColor = waitTime > 30 ? '#ef4444' : waitTime > 15 ? '#f97316' : '#10b981';
-        
-        const popupContent = isActiveOrder
-          ? `
-            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
-              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
-                <span style="display: inline-block; padding: 4px 8px; background: #3b82f6; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
-              </div>
-              <div style="margin-bottom: 8px; padding: 8px; background: #f3f4f6; border-radius: 6px;">
-                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Водитель:</strong> ${order.driver?.name || 'Не назначен'}</p>
-                ${order.driver?.car_model ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Машина: ${order.driver.car_model}</p>` : ''}
-              </div>
-              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
-              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
-              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
-              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
-                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
-                  📋 Просмотреть детали
-                </button>
-              </div>
-            </div>
-          `
-          : `
-            <div style="min-width: 280px; font-family: system-ui, -apple-system, sans-serif;">
-              <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-                <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">Заказ #${order.id.split('_')[1] || order.id}</h3>
-                <span style="display: inline-block; padding: 4px 8px; background: #f59e0b; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">${statusLabel}</span>
-              </div>
-              <div style="margin-bottom: 8px; padding: 8px; background: #fef3c7; border-radius: 6px;">
-                <p style="margin: 4px 0; font-size: 13px;"><strong>👤 Пассажир:</strong> ${order.passenger?.full_name || 'Не указан'}</p>
-                <p style="margin: 4px 0; font-size: 12px; color: ${waitTimeColor};"><strong>⏱️ Ожидание:</strong> ${waitTimeText}</p>
-              </div>
-              ${order.pickup_title ? `<div style="margin: 6px 0; padding: 6px; background: #d1fae5; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p></div>` : ''}
-              ${order.dropoff_title ? `<div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;"><p style="margin: 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p></div>` : ''}
-              ${order.distance_km ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">📏 Расстояние: ${order.distance_km.toFixed(1)} км</p>` : ''}
-              ${order.seats_needed > 1 ? `<p style="margin: 6px 0; font-size: 12px; color: #6b7280;">💺 Мест: ${order.seats_needed}</p>` : ''}
-              <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
-                <button onclick="window.dispatchEvent(new CustomEvent('orderClick', {detail: '${order.id}'}))" 
-                        style="width: 100%; padding: 8px 12px; background: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s;">
-                  📋 Просмотреть детали
-                </button>
-              </div>
-            </div>
-          `;
-
-        marker.bindPopup(popupContent);
-        marker.on('click', () => {
+        const marker = new ymaps.Placemark(
+          [order.pickup_lat, order.pickup_lon],
+          { balloonContent, iconCaption: `#${getOrderNumber(orderId)}` },
+          { preset }
+        );
+        marker.events.add('click', () => {
           onOrderClick(order.id);
         });
-
         orderMarkersRef.current.set(orderId, marker);
-        
-        // Добавляем маркер в кластер
-        if (orderClusterRef.current) {
-          orderClusterRef.current.addLayer(marker);
-        } else if (mapInstanceRef.current) {
-          marker.addTo(mapInstanceRef.current);
-        }
+        mapInstanceRef.current!.geoObjects.add(marker);
       }
     });
 
@@ -2389,44 +2043,22 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     previousDataRef.current.orders.forEach(orderId => {
       if (!currentOrderIds.has(orderId)) {
         const marker = orderMarkersRef.current.get(orderId);
-        if (marker) {
-          // Удаляем из кластера
-          if (orderClusterRef.current) {
-            orderClusterRef.current.removeLayer(marker);
-          } else {
-            // Плавное удаление маркера с анимацией
-            const element = marker.getElement();
-            if (element) {
-              element.style.transition = 'opacity 300ms ease-out, transform 300ms ease-out';
-              element.style.opacity = '0';
-              element.style.transform = 'scale(0.5)';
-              setTimeout(() => {
-                marker.remove();
-                orderMarkersRef.current.delete(orderId);
-              }, 300);
-            } else {
-              marker.remove();
-              orderMarkersRef.current.delete(orderId);
-            }
-          }
+        if (marker && mapInstanceRef.current) {
+          mapInstanceRef.current.geoObjects.remove(marker);
+          orderMarkersRef.current.delete(orderId);
         }
       }
     });
 
     previousDataRef.current.orders = currentOrderIds;
-  }, [orders, activeOrders, onOrderClick]);
+  }, [orders, activeOrders, onOrderClick, showOrders]);
 
   // Обновление маркеров водителей
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     if (!showDrivers) {
-      // Скрываем все маркеры водителей
       driverMarkersRef.current.forEach(marker => {
-        if (driverClusterRef.current) {
-          driverClusterRef.current.removeLayer(marker);
-        } else {
-          marker.remove();
-        }
+        mapInstanceRef.current!.geoObjects.remove(marker);
       });
       return;
     }
@@ -2441,152 +2073,69 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       const existingMarker = driverMarkersRef.current.get(driverId);
       const newPos: [number, number] = [driver.current_lat!, driver.current_lon!];
 
-      if (existingMarker) {
-        // Обновляем позицию с анимацией
-        const currentPos = existingMarker.getLatLng();
-        const distance = Math.sqrt(
-          Math.pow(currentPos.lat - newPos[0], 2) + 
-          Math.pow(currentPos.lng - newPos[1], 2)
-        );
+      const hasActiveOrder = activeOrders.some(o => o.driver_id === driverId);
+      const activeOrder = activeOrders.find(o => o.driver_id === driverId);
 
-        // Если расстояние больше минимального порога, анимируем перемещение
-        if (distance > 0.0001) {
-          // Используем плавную анимацию перемещения маркера
-          animateMarker(existingMarker, newPos, 1000); // 1 секунда для плавной анимации
-        }
-
-        // Определяем статус водителя
-        const hasActiveOrder = activeOrders.some(o => o.driver_id === driverId);
-        const activeOrder = activeOrders.find(o => o.driver_id === driverId);
-        
-        // Вычисляем bearing (направление) если есть предыдущая позиция
-        let bearing: number | undefined;
-        const prevPos = (existingMarker as any).__prevPos;
-        if (prevPos && driver.current_lat && driver.current_lon) {
-          const lat1 = prevPos.lat * Math.PI / 180;
-          const lat2 = driver.current_lat * Math.PI / 180;
-          const dLon = (driver.current_lon - prevPos.lng) * Math.PI / 180;
-          const y = Math.sin(dLon) * Math.cos(lat2);
-          const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-          bearing = Math.atan2(y, x) * 180 / Math.PI;
-        }
-        
-        const customDriverIcon = createDriverIcon(driver.is_online, hasActiveOrder, bearing);
-        
-        // Обновляем popup с расширенной информацией
-        const lastUpdate = driver.last_location_update 
-          ? new Date(driver.last_location_update).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-          : 'Неизвестно';
-        
-        // Получаем ETA если есть
-        const etaInfo = (driver as any).eta;
-        const etaText = etaInfo 
-          ? `<div style="margin: 6px 0; padding: 6px; background: #dbeafe; border-radius: 4px;">
-               <p style="margin: 2px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6; font-weight: 600;">~${etaInfo.duration_minutes} мин</span></p>
-               <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">📏 Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>
-             </div>`
-          : '';
-        
-        const popupContent = `
-          <div style="min-width: 260px; font-family: system-ui, -apple-system, sans-serif;">
-            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">${driver.name}</h3>
-              <span style="display: inline-block; padding: 4px 8px; background: ${driver.is_online ? '#10b981' : '#6b7280'}; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">
-                ${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}
-              </span>
-              ${hasActiveOrder ? '<span style="display: inline-block; margin-left: 4px; padding: 4px 8px; background: #ef4444; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">🚕 На заказе</span>' : ''}
-            </div>
-            <div style="margin-bottom: 8px; padding: 8px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 6px;">
-              <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Машина:</strong> ${driver.car_model || 'Не указана'}</p>
-              ${driver.plate_number ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Номер: ${driver.plate_number}</p>` : ''}
-              <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
-              ${driver.capacity ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">💺 Вместимость: ${driver.capacity} мест</p>` : ''}
-            </div>
-            ${etaText}
-            ${activeOrder ? `
-              <div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>📦 Активный заказ:</strong> #${activeOrder.id.split('_')[1] || activeOrder.id}</p>
-                <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Пассажир: ${activeOrder.passenger?.full_name || 'Не указан'}</p>
-              </div>
-            ` : ''}
-            <p style="margin: 6px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
-            ${driver.current_lat && driver.current_lon ? `<p style="margin: 4px 0; font-size: 10px; color: #9ca3af;">Координаты: ${driver.current_lat.toFixed(6)}, ${driver.current_lon.toFixed(6)}</p>` : ''}
-          </div>
-        `;
-        
-        // Обновляем иконку водителя если нужно
-        const currentIcon = existingMarker.options.icon;
-        if (!currentIcon || (currentIcon as L.DivIcon).options.html !== customDriverIcon.options.html) {
-          existingMarker.setIcon(customDriverIcon);
-        }
-        
-        // Сохраняем текущую позицию для вычисления bearing
-        (existingMarker as any).__prevPos = { lat: driver.current_lat, lng: driver.current_lon };
-        
-        existingMarker.setPopupContent(popupContent);
+      let preset: string;
+      if (!driver.is_online) {
+        preset = 'islands#grayAutoIcon';
+      } else if (hasActiveOrder) {
+        preset = 'islands#redAutoIcon';
       } else {
-        // Определяем статус водителя
-        const hasActiveOrder = activeOrders.some(o => o.driver_id === driverId);
-        const activeOrder = activeOrders.find(o => o.driver_id === driverId);
-        
-        const customDriverIcon = createDriverIcon(driver.is_online, hasActiveOrder);
-        
-        // Создаем новый маркер водителя
-        const marker = L.marker(newPos, {
-          icon: customDriverIcon
-        });
+        preset = 'islands#greenAutoIcon';
+      }
 
-        const lastUpdate = driver.last_location_update 
-          ? new Date(driver.last_location_update).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-          : 'Неизвестно';
-        
-        // Получаем ETA если есть
-        const etaInfo = (driver as any).eta;
-        const etaText = etaInfo 
-          ? `<div style="margin: 6px 0; padding: 6px; background: #dbeafe; border-radius: 4px;">
-               <p style="margin: 2px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6; font-weight: 600;">~${etaInfo.duration_minutes} мин</span></p>
-               <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">📏 Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>
-             </div>`
-          : '';
-        
-        const popupContent = `
-          <div style="min-width: 260px; font-family: system-ui, -apple-system, sans-serif;">
-            <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
-              <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">${driver.name}</h3>
-              <span style="display: inline-block; padding: 4px 8px; background: ${driver.is_online ? '#10b981' : '#6b7280'}; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">
-                ${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}
-              </span>
-              ${hasActiveOrder ? '<span style="display: inline-block; margin-left: 4px; padding: 4px 8px; background: #ef4444; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">🚕 На заказе</span>' : ''}
-            </div>
-            <div style="margin-bottom: 8px; padding: 8px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 6px;">
-              <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Машина:</strong> ${driver.car_model || 'Не указана'}</p>
-              ${driver.plate_number ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Номер: ${driver.plate_number}</p>` : ''}
-              <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
-              ${driver.capacity ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">💺 Вместимость: ${driver.capacity} мест</p>` : ''}
-            </div>
-            ${etaText}
-            ${activeOrder ? `
-              <div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;">
-                <p style="margin: 2px 0; font-size: 12px;"><strong>📦 Активный заказ:</strong> #${activeOrder.id.split('_')[1] || activeOrder.id}</p>
-                <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Пассажир: ${activeOrder.passenger?.full_name || 'Не указан'}</p>
-              </div>
-            ` : ''}
-            <p style="margin: 6px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
-            ${driver.current_lat && driver.current_lon ? `<p style="margin: 4px 0; font-size: 10px; color: #9ca3af;">Координаты: ${driver.current_lat.toFixed(6)}, ${driver.current_lon.toFixed(6)}</p>` : ''}
+      const lastUpdate = driver.last_location_update 
+        ? new Date(driver.last_location_update).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+        : 'Неизвестно';
+      
+      const etaInfo = (driver as any).eta;
+      const etaText = etaInfo 
+        ? `<div style="margin: 6px 0; padding: 6px; background: #dbeafe; border-radius: 4px;">
+             <p style="margin: 2px 0; font-size: 12px;"><strong>⏱️ ETA:</strong> <span style="color: #3b82f6; font-weight: 600;">~${etaInfo.duration_minutes} мин</span></p>
+             <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">📏 Расстояние: ${etaInfo.distance_km?.toFixed(2) || '—'} км</p>
+           </div>`
+        : '';
+
+      const balloonContent = `
+        <div style="min-width: 260px; font-family: system-ui, -apple-system, sans-serif;">
+          <div style="margin-bottom: 10px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb;">
+            <h3 style="margin: 0 0 4px 0; font-weight: 600; font-size: 16px; color: #1f2937;">${driver.name}</h3>
+            <span style="display: inline-block; padding: 4px 8px; background: ${driver.is_online ? '#10b981' : '#6b7280'}; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">
+              ${driver.is_online ? '🟢 Онлайн' : '⚫ Оффлайн'}
+            </span>
+            ${hasActiveOrder ? '<span style="display: inline-block; margin-left: 4px; padding: 4px 8px; background: #ef4444; color: white; border-radius: 4px; font-size: 11px; font-weight: 500;">🚕 На заказе</span>' : ''}
           </div>
-        `;
+          <div style="margin-bottom: 8px; padding: 8px; background: ${driver.is_online ? '#d1fae5' : '#f3f4f6'}; border-radius: 6px;">
+            <p style="margin: 4px 0; font-size: 13px;"><strong>🚗 Машина:</strong> ${driver.car_model || 'Не указана'}</p>
+            ${driver.plate_number ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Номер: ${driver.plate_number}</p>` : ''}
+            <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Регион:</strong> ${driver.region?.title || 'Не указан'}</p>
+            ${driver.capacity ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">💺 Вместимость: ${driver.capacity} мест</p>` : ''}
+          </div>
+          ${etaText}
+          ${activeOrder ? `
+            <div style="margin: 6px 0; padding: 6px; background: #fee2e2; border-radius: 4px;">
+              <p style="margin: 2px 0; font-size: 12px;"><strong>📦 Активный заказ:</strong> #${activeOrder.id.split('_')[1] || activeOrder.id}</p>
+              <p style="margin: 2px 0; font-size: 11px; color: #6b7280;">Пассажир: ${activeOrder.passenger?.full_name || 'Не указан'}</p>
+            </div>
+          ` : ''}
+          <p style="margin: 6px 0; font-size: 11px; color: #6b7280;">🕐 Обновлено: ${lastUpdate}</p>
+          ${driver.current_lat && driver.current_lon ? `<p style="margin: 4px 0; font-size: 10px; color: #9ca3af;">Координаты: ${driver.current_lat.toFixed(6)}, ${driver.current_lon.toFixed(6)}</p>` : ''}
+        </div>
+      `;
 
-        marker.bindPopup(popupContent);
-        // Сохраняем текущую позицию для вычисления bearing
-        (marker as any).__prevPos = { lat: driver.current_lat, lng: driver.current_lon };
+      if (existingMarker) {
+        existingMarker.geometry.setCoordinates(newPos);
+        existingMarker.properties.set({ balloonContent });
+        existingMarker.options.set('preset', preset);
+      } else {
+        const marker = new ymaps.Placemark(
+          newPos,
+          { balloonContent, iconCaption: driver.name },
+          { preset }
+        );
         driverMarkersRef.current.set(driverId, marker);
-        
-        // Добавляем маркер в кластер
-        if (driverClusterRef.current) {
-          driverClusterRef.current.addLayer(marker);
-        } else if (mapInstanceRef.current) {
-          marker.addTo(mapInstanceRef.current);
-        }
+        mapInstanceRef.current!.geoObjects.add(marker);
       }
     });
 
@@ -2594,28 +2143,26 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     previousDataRef.current.drivers.forEach(driverId => {
       if (!currentDriverIds.has(driverId)) {
         const marker = driverMarkersRef.current.get(driverId);
-        if (marker) {
-          // Удаляем из кластера
-          if (driverClusterRef.current) {
-            driverClusterRef.current.removeLayer(marker);
-          } else {
-            marker.remove();
-          }
+        if (marker && mapInstanceRef.current) {
+          mapInstanceRef.current.geoObjects.remove(marker);
           driverMarkersRef.current.delete(driverId);
         }
       }
     });
 
     previousDataRef.current.drivers = currentDriverIds;
-  }, [drivers]);
+  }, [drivers, activeOrders, showDrivers]);
 
-  // Отображение маршрутов водителей до активных заказов с улучшенной визуализацией
+  // Отображение маршрутов водителей до активных заказов
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     if (!showRoutes) {
-      // Скрываем все маршруты
-      driverRoutesRef.current.forEach(route => route.remove());
-      orderRoutesRef.current.forEach(route => route.remove());
+      driverRoutesRef.current.forEach(route => {
+        mapInstanceRef.current!.geoObjects.remove(route);
+      });
+      orderRoutesRef.current.forEach(route => {
+        mapInstanceRef.current!.geoObjects.remove(route);
+      });
       return;
     }
 
@@ -2630,92 +2177,73 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
 
       const routeKey = `driver_${driverId}_order_${order.id}`;
       
-      // Проверяем кэш
       if (routeCacheRef.current.has(routeKey)) {
         const cachedRoute = routeCacheRef.current.get(routeKey);
         const existingRoute = driverRoutesRef.current.get(routeKey);
         
-        if (!existingRoute && cachedRoute) {
-          const polyline = L.polyline(cachedRoute.route as [number, number][], {
-            color: '#3b82f6',
-            weight: 5,
-            opacity: 0.8,
-            dashArray: '15, 10',
-            lineCap: 'round',
-            lineJoin: 'round'
-          }).addTo(mapInstanceRef.current);
-          
-          // Добавляем стрелки направления (упрощенная версия)
-          const routePoints = cachedRoute.route as [number, number][];
-          if (routePoints.length > 1) {
-            const midPoint = routePoints[Math.floor(routePoints.length / 2)];
-            const directionMarker = L.marker(midPoint, {
-              icon: L.divIcon({
-                className: 'route-direction-marker',
-                html: '<div style="font-size: 20px; transform: rotate(45deg);">➤</div>',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
-              })
-            }).addTo(mapInstanceRef.current);
-            (polyline as any).directionMarker = directionMarker;
-          }
-          
+        if (!existingRoute && cachedRoute && mapInstanceRef.current) {
+          const polyline = new ymaps.Polyline(
+            cachedRoute.route as number[][],
+            {
+              balloonContent: `
+                <div style="min-width: 200px; font-family: system-ui, -apple-system, sans-serif;">
+                  <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">🚗 Маршрут водителя</h4>
+                  <div style="padding: 8px; background: #dbeafe; border-radius: 6px;">
+                    <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${cachedRoute.distance_km.toFixed(2)} км</p>
+                    <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${cachedRoute.duration_minutes} мин</p>
+                  </div>
+                  ${driver.name ? `<p style="margin: 8px 0 0 0; font-size: 12px; color: #6b7280;">Водитель: ${driver.name}</p>` : ''}
+                </div>
+              `,
+            },
+            {
+              strokeColor: '#3b82f6',
+              strokeWidth: 5,
+              opacity: 0.8,
+              strokeStyle: 'shortdash',
+            }
+          );
+          mapInstanceRef.current.geoObjects.add(polyline);
           driverRoutesRef.current.set(routeKey, polyline);
         }
         return;
       }
 
-      // Загружаем маршрут
       try {
         const routeData = await dispatchApi.getDriverRoute(driverId);
         routeCacheRef.current.set(routeKey, routeData);
         
-        // Удаляем старый маршрут если есть
         const existingRoute = driverRoutesRef.current.get(routeKey);
-        if (existingRoute) {
-          existingRoute.remove();
-          if ((existingRoute as any).directionMarker) {
-            (existingRoute as any).directionMarker.remove();
+        if (existingRoute && mapInstanceRef.current) {
+          mapInstanceRef.current.geoObjects.remove(existingRoute);
+        }
+        
+        if (!mapInstanceRef.current) return;
+
+        const polyline = new ymaps.Polyline(
+          routeData.route as number[][],
+          {
+            balloonContent: `
+              <div style="min-width: 200px; font-family: system-ui, -apple-system, sans-serif;">
+                <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">🚗 Маршрут водителя</h4>
+                <div style="padding: 8px; background: #dbeafe; border-radius: 6px;">
+                  <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
+                  <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
+                  <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
+                </div>
+                ${driver.name ? `<p style="margin: 8px 0 0 0; font-size: 12px; color: #6b7280;">Водитель: ${driver.name}</p>` : ''}
+              </div>
+            `,
+          },
+          {
+            strokeColor: '#3b82f6',
+            strokeWidth: 5,
+            opacity: 0.8,
+            strokeStyle: 'shortdash',
           }
-        }
+        );
         
-        // Создаем новый маршрут с улучшенным стилем
-        const polyline = L.polyline(routeData.route as [number, number][], {
-          color: '#3b82f6',
-          weight: 5,
-          opacity: 0.8,
-          dashArray: '15, 10',
-          lineCap: 'round',
-          lineJoin: 'round'
-        }).addTo(mapInstanceRef.current);
-        
-        // Добавляем стрелки направления
-        const routePoints = routeData.route as [number, number][];
-        if (routePoints.length > 1) {
-          const midPoint = routePoints[Math.floor(routePoints.length / 2)];
-          const directionMarker = L.marker(midPoint, {
-            icon: L.divIcon({
-              className: 'route-direction-marker',
-              html: '<div style="font-size: 20px; color: #3b82f6; transform: rotate(45deg);">➤</div>',
-              iconSize: [20, 20],
-              iconAnchor: [10, 10],
-            })
-          }).addTo(mapInstanceRef.current);
-          (polyline as any).directionMarker = directionMarker;
-        }
-        
-        polyline.bindPopup(`
-          <div style="min-width: 200px; font-family: system-ui, -apple-system, sans-serif;">
-            <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">🚗 Маршрут водителя</h4>
-            <div style="padding: 8px; background: #dbeafe; border-radius: 6px;">
-              <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
-              <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
-              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
-            </div>
-            ${driver.name ? `<p style="margin: 8px 0 0 0; font-size: 12px; color: #6b7280;">Водитель: ${driver.name}</p>` : ''}
-          </div>
-        `);
-        
+        mapInstanceRef.current.geoObjects.add(polyline);
         driverRoutesRef.current.set(routeKey, polyline);
       } catch (error) {
         console.error(`Error loading route for driver ${driverId}:`, error);
@@ -2724,23 +2252,22 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
 
     // Удаляем маршруты для неактивных заказов
     driverRoutesRef.current.forEach((route, key) => {
-      const [, driverId, , orderId] = key.split('_');
+      const parts = key.split('_');
+      const driverId = parts[1];
+      const orderId = parts[3];
       const orderExists = activeOrders.some(o => 
         String(o.id) === orderId && o.driver_id === driverId
       );
       
-      if (!orderExists) {
-        route.remove();
-        if ((route as any).directionMarker) {
-          (route as any).directionMarker.remove();
-        }
+      if (!orderExists && mapInstanceRef.current) {
+        mapInstanceRef.current.geoObjects.remove(route);
         driverRoutesRef.current.delete(key);
         routeCacheRef.current.delete(key);
       }
     });
   }, [activeOrders, drivers, showRoutes]);
 
-  // Отображение маршрутов заказов (от точки забора до высадки) с улучшенной визуализацией
+  // Отображение маршрутов заказов (от точки забора до высадки)
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     if (!showRoutes) return;
@@ -2752,95 +2279,81 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     ordersWithDropoff.forEach(async (order) => {
       const routeKey = `order_${order.id}`;
       
-      // Проверяем кэш
       if (routeCacheRef.current.has(routeKey)) {
         const cachedRoute = routeCacheRef.current.get(routeKey);
         const existingRoute = orderRoutesRef.current.get(routeKey);
         
-        if (!existingRoute && cachedRoute) {
-          const polyline = L.polyline(cachedRoute.route as [number, number][], {
-            color: '#10b981',
-            weight: 5,
-            opacity: 0.8,
-            lineCap: 'round',
-            lineJoin: 'round'
-          }).addTo(mapInstanceRef.current);
-          
-          // Добавляем стрелки направления
-          const routePoints = cachedRoute.route as [number, number][];
-          if (routePoints.length > 1) {
-            const midPoint = routePoints[Math.floor(routePoints.length / 2)];
-            const directionMarker = L.marker(midPoint, {
-              icon: L.divIcon({
-                className: 'route-direction-marker',
-                html: '<div style="font-size: 20px; color: #10b981; transform: rotate(45deg);">➤</div>',
-                iconSize: [20, 20],
-                iconAnchor: [10, 10],
-              })
-            }).addTo(mapInstanceRef.current);
-            (polyline as any).directionMarker = directionMarker;
-          }
-          
+        if (!existingRoute && cachedRoute && mapInstanceRef.current) {
+          const polyline = new ymaps.Polyline(
+            cachedRoute.route as number[][],
+            {
+              balloonContent: `
+                <div style="min-width: 220px; font-family: system-ui, -apple-system, sans-serif;">
+                  <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">📦 Маршрут заказа</h4>
+                  <div style="margin-bottom: 8px; padding: 6px; background: #d1fae5; border-radius: 4px;">
+                    <p style="margin: 2px 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p>
+                  </div>
+                  <div style="margin-bottom: 8px; padding: 6px; background: #fee2e2; border-radius: 4px;">
+                    <p style="margin: 2px 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p>
+                  </div>
+                  <div style="padding: 8px; background: #d1fae5; border-radius: 6px;">
+                    <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${cachedRoute.distance_km.toFixed(2)} км</p>
+                    <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${cachedRoute.duration_minutes} мин</p>
+                  </div>
+                </div>
+              `,
+            },
+            {
+              strokeColor: '#10b981',
+              strokeWidth: 5,
+              opacity: 0.8,
+            }
+          );
+          mapInstanceRef.current.geoObjects.add(polyline);
           orderRoutesRef.current.set(routeKey, polyline);
         }
         return;
       }
 
-      // Загружаем маршрут
       try {
         const routeData = await dispatchApi.getOrderRoute(String(order.id));
         routeCacheRef.current.set(routeKey, routeData);
         
-        // Удаляем старый маршрут если есть
         const existingRoute = orderRoutesRef.current.get(routeKey);
-        if (existingRoute) {
-          existingRoute.remove();
-          if ((existingRoute as any).directionMarker) {
-            (existingRoute as any).directionMarker.remove();
+        if (existingRoute && mapInstanceRef.current) {
+          mapInstanceRef.current.geoObjects.remove(existingRoute);
+        }
+        
+        if (!mapInstanceRef.current) return;
+
+        const polyline = new ymaps.Polyline(
+          routeData.route as number[][],
+          {
+            balloonContent: `
+              <div style="min-width: 220px; font-family: system-ui, -apple-system, sans-serif;">
+                <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">📦 Маршрут заказа</h4>
+                <div style="margin-bottom: 8px; padding: 6px; background: #d1fae5; border-radius: 4px;">
+                  <p style="margin: 2px 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p>
+                </div>
+                <div style="margin-bottom: 8px; padding: 6px; background: #fee2e2; border-radius: 4px;">
+                  <p style="margin: 2px 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p>
+                </div>
+                <div style="padding: 8px; background: #d1fae5; border-radius: 6px;">
+                  <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
+                  <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
+                  <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
+                </div>
+              </div>
+            `,
+          },
+          {
+            strokeColor: '#10b981',
+            strokeWidth: 5,
+            opacity: 0.8,
           }
-        }
+        );
         
-        // Создаем новый маршрут с улучшенным стилем
-        const polyline = L.polyline(routeData.route as [number, number][], {
-          color: '#10b981',
-          weight: 5,
-          opacity: 0.8,
-          lineCap: 'round',
-          lineJoin: 'round'
-        }).addTo(mapInstanceRef.current);
-        
-        // Добавляем стрелки направления
-        const routePoints = routeData.route as [number, number][];
-        if (routePoints.length > 1) {
-          const midPoint = routePoints[Math.floor(routePoints.length / 2)];
-          const directionMarker = L.marker(midPoint, {
-            icon: L.divIcon({
-              className: 'route-direction-marker',
-              html: '<div style="font-size: 20px; color: #10b981; transform: rotate(45deg);">➤</div>',
-              iconSize: [20, 20],
-              iconAnchor: [10, 10],
-            })
-          }).addTo(mapInstanceRef.current);
-          (polyline as any).directionMarker = directionMarker;
-        }
-        
-        polyline.bindPopup(`
-          <div style="min-width: 220px; font-family: system-ui, -apple-system, sans-serif;">
-            <h4 style="margin: 0 0 10px 0; font-weight: 600; font-size: 14px; color: #1f2937;">📦 Маршрут заказа</h4>
-            <div style="margin-bottom: 8px; padding: 6px; background: #d1fae5; border-radius: 4px;">
-              <p style="margin: 2px 0; font-size: 12px;"><strong>📍 От:</strong> ${order.pickup_title}</p>
-            </div>
-            <div style="margin-bottom: 8px; padding: 6px; background: #fee2e2; border-radius: 4px;">
-              <p style="margin: 2px 0; font-size: 12px;"><strong>🎯 До:</strong> ${order.dropoff_title}</p>
-            </div>
-            <div style="padding: 8px; background: #d1fae5; border-radius: 6px;">
-              <p style="margin: 4px 0; font-size: 13px;"><strong>📏 Расстояние:</strong> ${routeData.distance_km.toFixed(2)} км</p>
-              <p style="margin: 4px 0; font-size: 13px;"><strong>⏱️ Время в пути:</strong> ~${routeData.duration_minutes} мин</p>
-              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ETA: ${routeData.eta || '—'}</p>
-            </div>
-          </div>
-        `);
-        
+        mapInstanceRef.current.geoObjects.add(polyline);
         orderRoutesRef.current.set(routeKey, polyline);
       } catch (error) {
         console.error(`Error loading route for order ${order.id}:`, error);
@@ -2849,14 +2362,12 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
 
     // Удаляем маршруты для неактивных заказов
     orderRoutesRef.current.forEach((route, key) => {
-      const [, orderId] = key.split('_');
+      const parts = key.split('_');
+      const orderId = parts[1];
       const orderExists = activeOrders.some(o => String(o.id) === orderId);
       
-      if (!orderExists) {
-        route.remove();
-        if ((route as any).directionMarker) {
-          (route as any).directionMarker.remove();
-        }
+      if (!orderExists && mapInstanceRef.current) {
+        mapInstanceRef.current.geoObjects.remove(route);
         orderRoutesRef.current.delete(key);
         routeCacheRef.current.delete(key);
       }
@@ -2868,9 +2379,8 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     if (!mapInstanceRef.current) return;
     
     if (!showCities) {
-      // Скрываем все маркеры городов
       cityMarkersRef.current.forEach(marker => {
-        marker.remove();
+        mapInstanceRef.current!.geoObjects.remove(marker);
       });
       cityMarkersRef.current.clear();
       return;
@@ -2887,51 +2397,34 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       const existingMarker = cityMarkersRef.current.get(cityId);
       const position: [number, number] = [city.center_lat, city.center_lon];
 
+      const balloonContent = `
+        <div style="min-width: 180px;">
+          <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">🏙️ ${city.title}</h3>
+          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${city.id}</p>
+          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
+            Координаты: ${city.center_lat.toFixed(6)}, ${city.center_lon.toFixed(6)}
+          </p>
+        </div>
+      `;
+
       if (existingMarker) {
-        // Обновляем существующий маркер
-        existingMarker.setLatLng(position);
-        
-        const popupContent = `
-          <div style="min-width: 180px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">🏙️ ${city.title}</h3>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${city.id}</p>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
-              Координаты: ${city.center_lat.toFixed(6)}, ${city.center_lon.toFixed(6)}
-            </p>
-          </div>
-        `;
-        existingMarker.setPopupContent(popupContent);
+        existingMarker.geometry.setCoordinates(position);
+        existingMarker.properties.set({ balloonContent });
       } else {
-        // Создаем новый маркер города
-        const marker = L.marker(position, {
-          icon: L.icon({
-            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
-            iconSize: [25, 41],
-            iconAnchor: [12, 41],
-            popupAnchor: [1, -34],
-          })
-        });
-
-        const popupContent = `
-          <div style="min-width: 180px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">🏙️ ${city.title}</h3>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${city.id}</p>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
-              Координаты: ${city.center_lat.toFixed(6)}, ${city.center_lon.toFixed(6)}
-            </p>
-          </div>
-        `;
-
-        marker.bindPopup(popupContent);
-        marker.addTo(mapInstanceRef.current);
+        const marker = new ymaps.Placemark(
+          position,
+          { balloonContent, iconCaption: city.title },
+          { preset: 'islands#blueCircleDotIcon' }
+        );
+        mapInstanceRef.current!.geoObjects.add(marker);
         cityMarkersRef.current.set(cityId, marker);
       }
     });
 
     // Удаляем маркеры городов, которых больше нет
     cityMarkersRef.current.forEach((marker, cityId) => {
-      if (!currentCityIds.has(cityId)) {
-        marker.remove();
+      if (!currentCityIds.has(cityId) && mapInstanceRef.current) {
+        mapInstanceRef.current.geoObjects.remove(marker);
         cityMarkersRef.current.delete(cityId);
       }
     });
@@ -2942,9 +2435,8 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     if (!mapInstanceRef.current) return;
     
     if (!showRegions) {
-      // Скрываем все слои регионов
-      regionLayersRef.current.forEach(layer => {
-        layer.remove();
+      regionLayersRef.current.forEach((layer: any) => {
+        mapInstanceRef.current!.geoObjects.remove(layer);
       });
       regionLayersRef.current.clear();
       return;
@@ -2961,103 +2453,84 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       const existingLayer = regionLayersRef.current.get(regionId);
       const position: [number, number] = [region.center_lat, region.center_lon];
 
+      const balloonContent = `
+        <div style="min-width: 200px;">
+          <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">📍 ${region.title}</h3>
+          ${region.city ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Город: ${region.city.title}</p>` : ''}
+          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${region.id}</p>
+          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
+            Координаты: ${region.center_lat.toFixed(6)}, ${region.center_lon.toFixed(6)}
+          </p>
+          ${region.service_radius_meters ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Радиус: ${region.service_radius_meters} м</p>` : ''}
+        </div>
+      `;
+
       if (existingLayer) {
-        // Обновляем popup существующего слоя
-        const popupContent = `
-          <div style="min-width: 200px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">📍 ${region.title}</h3>
-            ${region.city ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Город: ${region.city.title}</p>` : ''}
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${region.id}</p>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
-              Координаты: ${region.center_lat.toFixed(6)}, ${region.center_lon.toFixed(6)}
-            </p>
-            ${region.service_radius_meters ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Радиус: ${region.service_radius_meters} м</p>` : ''}
-          </div>
-        `;
-        if ('setPopupContent' in existingLayer) {
-          (existingLayer as any).setPopupContent(popupContent);
-        }
-        // Для кругов обновляем позицию и радиус
-        if ('setLatLng' in existingLayer && 'setRadius' in existingLayer) {
-          (existingLayer as L.Circle).setLatLng(position);
-          if (region.service_radius_meters) {
-            (existingLayer as L.Circle).setRadius(region.service_radius_meters);
-          }
+        if (existingLayer.properties) {
+          existingLayer.properties.set({ balloonContent });
         }
       } else {
-        // Создаем новый слой региона
-        let layer: L.Layer;
+        let layer: any;
         
-        // Если есть полигон, создаем полигон
         if (region.polygon_coordinates && region.polygon_coordinates.length >= 3) {
-          const latlngs = region.polygon_coordinates.map(
-            (p) => [p[0], p[1]] as [number, number]
+          const coords = region.polygon_coordinates.map(
+            (p: number[]) => [p[0], p[1]] as [number, number]
           );
-          layer = L.polygon(latlngs, {
-            color: '#3b82f6',
-            fillColor: '#3b82f6',
-            fillOpacity: 0.2,
-            weight: 2,
-          });
+          layer = new ymaps.Polygon(
+            [coords],
+            { balloonContent },
+            {
+              fillColor: 'rgba(59, 130, 246, 0.2)',
+              strokeColor: '#3b82f6',
+              strokeWidth: 2,
+            }
+          );
         } else {
-          // Иначе создаем круг
-          const radius = region.service_radius_meters || 2000; // По умолчанию 2000м
-          layer = L.circle(position, {
-            radius: radius,
-            color: '#3b82f6',
-            fillColor: '#3b82f6',
-            fillOpacity: 0.2,
-            weight: 2,
-          });
+          const radius = region.service_radius_meters || 2000;
+          layer = new ymaps.Circle(
+            [position, radius],
+            { balloonContent },
+            {
+              fillColor: 'rgba(59, 130, 246, 0.2)',
+              strokeColor: '#3b82f6',
+              strokeWidth: 2,
+            }
+          );
         }
 
-        const popupContent = `
-          <div style="min-width: 200px;">
-            <h3 style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">📍 ${region.title}</h3>
-            ${region.city ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Город: ${region.city.title}</p>` : ''}
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">ID: ${region.id}</p>
-            <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">
-              Координаты: ${region.center_lat.toFixed(6)}, ${region.center_lon.toFixed(6)}
-            </p>
-            ${region.service_radius_meters ? `<p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Радиус: ${region.service_radius_meters} м</p>` : ''}
-          </div>
-        `;
-
-        layer.bindPopup(popupContent);
-        layer.addTo(mapInstanceRef.current);
+        mapInstanceRef.current!.geoObjects.add(layer);
         regionLayersRef.current.set(regionId, layer);
       }
     });
 
     // Удаляем слои регионов, которых больше нет
-    regionLayersRef.current.forEach((layer, regionId) => {
-      if (!currentRegionIds.has(regionId)) {
-        layer.remove();
+    regionLayersRef.current.forEach((layer: any, regionId: string) => {
+      if (!currentRegionIds.has(regionId) && mapInstanceRef.current) {
+        mapInstanceRef.current.geoObjects.remove(layer);
         regionLayersRef.current.delete(regionId);
       }
     });
   }, [regions, showRegions]);
 
-  // Отображение тепловой карты спроса (упрощенная версия через CircleMarker)
+  // Отображение тепловой карты спроса (через ymaps.Circle)
   useEffect(() => {
     if (!mapInstanceRef.current) return;
     
     if (!showHeatmap) {
-      // Скрываем тепловую карту
-      heatmapLayersRef.current.forEach(layer => layer.remove());
+      heatmapLayersRef.current.forEach((layer: any) => {
+        mapInstanceRef.current!.geoObjects.remove(layer);
+      });
       heatmapLayersRef.current = [];
       return;
     }
 
-    // Создаем данные для тепловой карты на основе заказов
     const allOrders = [...orders, ...activeOrders];
     const orderLocations = allOrders
       .filter(o => o.pickup_lat && o.pickup_lon)
       .map(o => ({ lat: o.pickup_lat!, lon: o.pickup_lon! }));
 
-    // Группируем заказы по близости для визуализации плотности
-    const groupedLocations = new Map<string, { lat: number; lon: number; count: number }>();
-    const clusterRadius = 0.01; // примерно 1км
+    const groupedLocations = new window.Map<string, { lat: number; lon: number; count: number }>();
+    const clusterRadius = 0.01;
 
     orderLocations.forEach(loc => {
       const key = `${Math.round(loc.lat / clusterRadius)}_${Math.round(loc.lon / clusterRadius)}`;
@@ -3070,35 +2543,39 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
     });
 
     // Удаляем старые слои
-    heatmapLayersRef.current.forEach(layer => layer.remove());
+    heatmapLayersRef.current.forEach((layer: any) => {
+      mapInstanceRef.current!.geoObjects.remove(layer);
+    });
     heatmapLayersRef.current = [];
 
-    // Создаем круги для визуализации плотности
     groupedLocations.forEach((location) => {
-      const intensity = Math.min(location.count / 5, 1); // нормализуем до 1
-      const radius = 200 + (intensity * 300); // радиус от 200 до 500 метров
+      const intensity = Math.min(location.count / 5, 1);
+      const radius = 200 + (intensity * 300);
       
-      // Цвет в зависимости от интенсивности
-      const hue = 240 - (intensity * 180); // от синего (240) до красного (60)
+      const hue = 240 - (intensity * 180);
       const color = `hsl(${hue}, 70%, 50%)`;
       
-      const circle = L.circleMarker([location.lat, location.lon], {
-        radius: radius / 10, // конвертируем метры в пиксели для circleMarker
-        fillColor: color,
-        color: color,
-        weight: 2,
-        opacity: 0.6,
-        fillOpacity: 0.3,
-      }).addTo(mapInstanceRef.current);
+      const circle = new ymaps.Circle(
+        [[location.lat, location.lon], radius],
+        {
+          balloonContent: `
+            <div style="min-width: 150px; font-family: system-ui, -apple-system, sans-serif;">
+              <h4 style="margin: 0 0 8px 0; font-weight: 600; font-size: 14px;">🔥 Тепловая карта</h4>
+              <p style="margin: 4px 0; font-size: 13px;"><strong>Заказов в зоне:</strong> ${location.count}</p>
+              <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Интенсивность: ${Math.round(intensity * 100)}%</p>
+            </div>
+          `,
+        },
+        {
+          fillColor: color,
+          fillOpacity: 0.3,
+          strokeColor: color,
+          strokeWidth: 2,
+          strokeOpacity: 0.6,
+        }
+      );
 
-      circle.bindPopup(`
-        <div style="min-width: 150px; font-family: system-ui, -apple-system, sans-serif;">
-          <h4 style="margin: 0 0 8px 0; font-weight: 600; font-size: 14px;">🔥 Тепловая карта</h4>
-          <p style="margin: 4px 0; font-size: 13px;"><strong>Заказов в зоне:</strong> ${location.count}</p>
-          <p style="margin: 4px 0; font-size: 12px; color: #6b7280;">Интенсивность: ${Math.round(intensity * 100)}%</p>
-        </div>
-      `);
-
+      mapInstanceRef.current!.geoObjects.add(circle);
       heatmapLayersRef.current.push(circle);
     });
   }, [orders, activeOrders, showHeatmap]);
@@ -3106,23 +2583,10 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
   // Очистка при размонтировании
   useEffect(() => {
     return () => {
-      orderMarkersRef.current.forEach(marker => marker.remove());
-      driverMarkersRef.current.forEach(marker => marker.remove());
-      driverRoutesRef.current.forEach(route => {
-        route.remove();
-        if ((route as any).directionMarker) {
-          (route as any).directionMarker.remove();
-        }
-      });
-      orderRoutesRef.current.forEach(route => {
-        route.remove();
-        if ((route as any).directionMarker) {
-          (route as any).directionMarker.remove();
-        }
-      });
-      cityMarkersRef.current.forEach(marker => marker.remove());
-      regionLayersRef.current.forEach(layer => layer.remove());
-      heatmapLayersRef.current.forEach(layer => layer.remove());
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+      }
       orderMarkersRef.current.clear();
       driverMarkersRef.current.clear();
       driverRoutesRef.current.clear();
@@ -3130,6 +2594,7 @@ function DispatchMap({ orders, activeOrders, drivers, onOrderClick, showOrders =
       cityMarkersRef.current.clear();
       regionLayersRef.current.clear();
       routeCacheRef.current.clear();
+      heatmapLayersRef.current = [];
     };
   }, []);
 

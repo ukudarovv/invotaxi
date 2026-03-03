@@ -15,6 +15,7 @@ import { Analytics } from "./components/Analytics";
 import { Logs } from "./components/Logs";
 import { Settings } from "./components/Settings";
 import { RideSimulation } from "./components/RideSimulation";
+import { DailyRoutes } from "./components/DailyRoutes";
 
 type PageType =
   | "dashboard"
@@ -27,6 +28,7 @@ type PageType =
   | "analytics"
   | "logs"
   | "settings"
+  | "daily-routes"
   | "ride-simulation";
 
 function MainApp() {
@@ -65,6 +67,8 @@ function MainApp() {
         return <Logs />;
       case "settings":
         return <Settings />;
+      case "daily-routes":
+        return <DailyRoutes />;
       case "ride-simulation":
         return <RideSimulation />;
       default:

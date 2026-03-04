@@ -28,7 +28,9 @@ export interface Order {
     };
   } | null;
   pickup_title: string;
+  pickup_object_name?: string;
   dropoff_title: string;
+  dropoff_object_name?: string;
   pickup_lat: number;
   pickup_lon: number;
   dropoff_lat: number;
@@ -66,7 +68,9 @@ export interface Order {
 
 export interface CreateOrderRequest {
   pickup_title: string;
+  pickup_object_name?: string;
   dropoff_title: string;
+  dropoff_object_name?: string;
   pickup_lat: number;
   pickup_lon: number;
   dropoff_lat: number;
@@ -207,6 +211,25 @@ export const ordersApi = {
     
     // Не устанавливаем Content-Type вручную - axios автоматически установит его с правильным boundary для FormData
     const response = await api.post<ImportResult>('/orders/import/', formData);
+    return response.data;
+  },
+
+  /**
+   * Очистить все заказы (требует confirm: true)
+   */
+  async clearAllOrders(confirm: boolean = false): Promise<{ success: boolean; deleted_count: number }> {
+    const response = await api.post<{ success: boolean; deleted_count: number }>('/orders/clear-all/', { confirm });
+    return response.data;
+  },
+
+  /**
+   * Экспорт заказов в Excel по шаблону (№, ФИО, откуда, куда, час, тел, без сопр)
+   */
+  async exportExcelTemplate(params?: ExportParams): Promise<Blob> {
+    const response = await api.get('/orders/export-excel-template/', {
+      params,
+      responseType: 'blob',
+    });
     return response.data;
   },
 

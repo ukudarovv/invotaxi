@@ -70,7 +70,7 @@ class OrderSerializer(serializers.ModelSerializer):
             'passenger_phone', 'passenger_name', 'passenger_region_id',
             'passenger_disability_category', 'passenger_allowed_companion',
             'driver', 'driver_id',
-            'pickup_title', 'dropoff_title',
+            'pickup_title', 'pickup_object_name', 'dropoff_title', 'dropoff_object_name',
             'pickup_lat', 'pickup_lon', 'dropoff_lat', 'dropoff_lon',
             'pickup_coordinate', 'dropoff_coordinate',
             'desired_pickup_time', 'has_companion', 'note',
@@ -93,6 +93,21 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def get_dropoff_coordinate(self, obj):
         return {'lat': obj.dropoff_lat, 'lon': obj.dropoff_lon}
+
+    def validate(self, attrs):
+        """Валидация: pickup_object_name и dropoff_object_name обязательны при создании"""
+        if self.instance is None:
+            pickup_obj = attrs.get('pickup_object_name')
+            if not pickup_obj or (isinstance(pickup_obj, str) and not pickup_obj.strip()):
+                raise serializers.ValidationError({
+                    'pickup_object_name': 'Название объекта (откуда) обязательно. Например: Дом инвалида, Поликлиника 3. Диспетчер ориентируется по названию, карта — по адресу.'
+                })
+            dropoff_obj = attrs.get('dropoff_object_name')
+            if not dropoff_obj or (isinstance(dropoff_obj, str) and not dropoff_obj.strip()):
+                raise serializers.ValidationError({
+                    'dropoff_object_name': 'Название объекта (куда) обязательно. Например: Поликлиника 3, Школа №5. Диспетчер ориентируется по названию, карта — по адресу.'
+                })
+        return attrs
 
     def create(self, validated_data):
         # Генерируем ID заказа

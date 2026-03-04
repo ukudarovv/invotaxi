@@ -26,6 +26,43 @@ ATYRAU_REGION_BOUNDS = {
 # Viewbox для Nominatim (формат: min_lon,min_lat,max_lon,max_lat)
 ATYRAU_VIEWBOX = f"{ATYRAU_REGION_BOUNDS['min_lon']},{ATYRAU_REGION_BOUNDS['min_lat']},{ATYRAU_REGION_BOUNDS['max_lon']},{ATYRAU_REGION_BOUNDS['max_lat']}"
 
+# Паттерны, указывающие на адрес (улица, дом и т.д.)
+ADDRESS_PATTERNS = re.compile(
+    r'\b(ул\.?|улица|пр\.?|проспект|пер\.?|переулок|бул\.?|бульвар|'
+    r'дом|д\.|корп\.|к\.|строение|стр\.|квартира|кв\.|'
+    r'\d+\s*[-/]?\s*\d*)\b',
+    re.IGNORECASE
+)
+
+
+def looks_like_establishment_name(query: str) -> bool:
+    """
+    Определяет, похож ли запрос на название заведения (ПОИ), а не на адрес.
+    Например: "Поликлиника 3", "Школа №5", "Дом инвалида" — заведения.
+    "улица Орманова 48", "пр. Абая 15" — адреса.
+    """
+    if not query or len(query.strip()) < 2:
+        return False
+    q = query.strip()
+    # Есть типичные адресные слова — это адрес
+    if ADDRESS_PATTERNS.search(q):
+        return False
+    # Содержит типичные названия заведений
+    establishment_keywords = (
+        'поликлиника', 'больница', 'школа', 'детсад', 'садик', 'лицей', 'гимназия',
+        'магазин', 'аптека', 'банк', 'почта', 'офис', 'центр', 'клуб', 'кафе',
+        'ресторан', 'гостиница', 'отель', 'стадион', 'парк', 'музей', 'театр',
+        'кино', 'церковь', 'мечеть', 'дом инвалида', 'дом престарелых',
+        '№', 'no.', 'n '
+    )
+    q_lower = q.lower()
+    if any(kw in q_lower for kw in establishment_keywords):
+        return True
+    # Формат "Название №5" — явный признак заведения
+    if '№' in q and re.search(r'№\s*\d+', q):
+        return True
+    return False
+
 
 def normalize_address_for_city(address: str, city_only: bool = True, default_city: Optional[str] = None) -> str:
     """
@@ -48,9 +85,18 @@ def normalize_address_for_city(address: str, city_only: bool = True, default_cit
     if default_city is None:
         default_city = getattr(settings, 'GEOCODING_DEFAULT_CITY', 'Атырау')
     
+    # Специальная обработка для села Курмангазы (улица Момышулы и др.)
+    address_lower_check = address.lower()
+    if 'курмангазы' in address_lower_check or 'kurmangazy' in address_lower_check:
+        default_city = 'село Курмангазы, Атырауская область'
+    # Другие населённые пункты Атырауской области
+    elif 'макат' in address_lower_check or 'махамбет' in address_lower_check or 'индербор' in address_lower_check:
+        default_city = 'Атырауская область'
+    
     # Замены для улучшения качества поиска
     replacements = {
         "ул.": "улица",
+        "ул ": "улица ",
         "пр.": "проспект",
         "пр-т": "проспект",
         "пр-кт": "проспект",
@@ -61,6 +107,11 @@ def normalize_address_for_city(address: str, city_only: bool = True, default_cit
         "ш.": "шоссе",
         "мкр.": "микрорайон",
         "мкрн": "микрорайон",
+        "мкр ": "микрорайон ",
+        "с.": "село",
+        "с ": "село ",
+        "г.": "город",
+        "г ": "город ",
     }
     
     for abbrev, full in replacements.items():
@@ -123,9 +174,17 @@ def normalize_address(address: str, default_city: Optional[str] = None) -> str:
     if default_city is None:
         default_city = getattr(settings, 'GEOCODING_DEFAULT_CITY', 'Атырау')
     
+    # Специальная обработка для населённых пунктов области
+    address_lower_check = address.lower()
+    if 'курмангазы' in address_lower_check or 'kurmangazy' in address_lower_check:
+        default_city = 'село Курмангазы, Атырауская область'
+    elif 'макат' in address_lower_check or 'махамбет' in address_lower_check or 'индербор' in address_lower_check:
+        default_city = 'Атырауская область'
+    
     # Замены для улучшения качества поиска
     replacements = {
         "ул.": "улица",
+        "ул ": "улица ",
         "пр.": "проспект",
         "пр-т": "проспект",
         "пр-кт": "проспект",
@@ -136,6 +195,11 @@ def normalize_address(address: str, default_city: Optional[str] = None) -> str:
         "ш.": "шоссе",
         "мкр.": "микрорайон",
         "мкрн": "микрорайон",
+        "мкр ": "микрорайон ",
+        "с.": "село",
+        "с ": "село ",
+        "г.": "город",
+        "г ": "город ",
     }
     
     for abbrev, full in replacements.items():
@@ -182,7 +246,8 @@ def geocode_address(
     address: str,
     countrycodes: str = DEFAULT_COUNTRY_CODES,
     retry_count: int = 3,
-    city_only: bool = False
+    city_only: bool = False,
+    limit: int = 1
 ) -> Dict[str, Any]:
     """
     Геокодирование одного адреса через Nominatim API.
@@ -223,7 +288,7 @@ def geocode_address(
     params = {
         "q": normalized_address,
         "format": "jsonv2",
-        "limit": 1,
+        "limit": limit,
         "addressdetails": 1,
         "countrycodes": countrycodes,
     }
@@ -628,20 +693,46 @@ def geocode_geocode_xyz(address: str, retry_count: int = 2) -> Dict[str, Any]:
 
 def geocode_address_with_fallback(
     address: str,
-    use_fallback: bool = False  # По умолчанию не используем fallback сервисы
+    use_fallback: bool = True  # По умолчанию используем Photon при неудаче Nominatim
 ) -> Dict[str, Any]:
     """
-    Геокодирование адреса с приоритетом города Атырау.
-    Сначала ищет строго в городе Атырау, если не найдено - расширяет поиск на область.
+    Геокодирование адреса или названия заведения.
+    Поддерживает поиск по адресу (улица, дом) и по названию заведения (Поликлиника 3, Школа №5).
+    
+    Для названий заведений: сначала Photon (хорош для ПОИ), затем Nominatim по области.
+    Для адресов: город Атырау -> область -> Photon.
     
     Args:
-        address: Адрес для геокодирования
-        use_fallback: Использовать ли fallback сервисы (по умолчанию False - только Nominatim)
+        address: Адрес или название заведения для геокодирования
+        use_fallback: Использовать ли Photon при неудаче Nominatim (по умолчанию True)
     
     Returns:
         Словарь с результатами, включая поле 'geocoder' и 'search_scope' (city/region)
     """
-    # Шаг 1: Сначала ищем строго в городе Атырау
+    is_establishment = looks_like_establishment_name(address)
+    
+    if is_establishment:
+        # Поиск по названию заведения: Photon лучше находит ПОИ
+        logger.info(f"Поиск по названию заведения: '{address}'")
+        if use_fallback:
+            photon_result = geocode_photon(address)
+            if photon_result['status'] == 'ok':
+                photon_result['geocoder'] = 'photon'
+                photon_result['search_scope'] = 'poi'
+                logger.info(f"Photon нашёл заведение: '{address}' -> ({photon_result['lat']}, {photon_result['lon']})")
+                return photon_result
+            time.sleep(1.0)
+        
+        # Nominatim по области (limit=5 для лучшего поиска ПОИ)
+        region_address = normalize_address_for_city(address, city_only=False)
+        result = geocode_address(region_address, city_only=False, limit=5)
+        if result['status'] == 'ok':
+            result['geocoder'] = 'nominatim'
+            result['search_scope'] = 'poi'
+            logger.info(f"Nominatim нашёл заведение: '{address}' -> ({result['lat']}, {result['lon']})")
+            return result
+    
+    # Шаг 1: Адрес — ищем в городе Атырау
     logger.info(f"Геокодирование адреса в городе Атырау: '{address}'")
     city_address = normalize_address_for_city(address, city_only=True)
     result = geocode_address(city_address, city_only=True)
@@ -649,12 +740,12 @@ def geocode_address_with_fallback(
     if result['status'] == 'ok':
         result['geocoder'] = 'nominatim'
         result['search_scope'] = 'city'
-        logger.info(f"Адрес успешно найден в городе Атырау: '{address}' -> ({result['lat']}, {result['lon']})")
+        logger.info(f"Адрес найден в городе Атырау: '{address}' -> ({result['lat']}, {result['lon']})")
         return result
     
-    # Шаг 2: Если не найдено в городе, расширяем поиск на область
-    logger.info(f"Адрес не найден в городе Атырау, расширяем поиск на область: '{address}'")
-    time.sleep(1.0)  # Соблюдаем rate limit
+    # Шаг 2: Расширяем поиск на область
+    logger.info(f"Адрес не найден в городе, расширяем поиск на область: '{address}'")
+    time.sleep(1.0)
     
     region_address = normalize_address_for_city(address, city_only=False)
     result = geocode_address(region_address, city_only=False)
@@ -665,10 +756,20 @@ def geocode_address_with_fallback(
         logger.info(f"Адрес найден в области: '{address}' -> ({result['lat']}, {result['lon']})")
         return result
     
-    # Если не найдено ни в городе, ни в области
+    # Шаг 3: Fallback на Photon
+    if use_fallback:
+        logger.info(f"Nominatim не нашёл, пробуем Photon: '{address}'")
+        time.sleep(1.0)
+        photon_result = geocode_photon(address)
+        if photon_result['status'] == 'ok':
+            photon_result['geocoder'] = 'photon'
+            photon_result['search_scope'] = 'fallback'
+            logger.info(f"Photon нашёл: '{address}' -> ({photon_result['lat']}, {photon_result['lon']})")
+            return photon_result
+    
     result['geocoder'] = 'nominatim'
     result['search_scope'] = 'none'
-    logger.warning(f"Адрес не найден ни в городе Атырау, ни в области: '{address}'")
+    logger.warning(f"Не найден: '{address}'")
     return result
 
 

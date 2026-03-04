@@ -61,7 +61,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   
   // Состояние для создания заказа
   const [pickupAddress, setPickupAddress] = useState("");
+  const [pickupObjectName, setPickupObjectName] = useState("");
   const [dropoffAddress, setDropoffAddress] = useState("");
+  const [dropoffObjectName, setDropoffObjectName] = useState("");
   const [pickupCoords, setPickupCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [dropoffCoords, setDropoffCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [selectedPassengerId, setSelectedPassengerId] = useState<string>("");
@@ -105,6 +107,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   // Импорт/экспорт
   const [importModal, setImportModal] = useState(false);
   const [exportModal, setExportModal] = useState(false);
+  const [clearAllModal, setClearAllModal] = useState(false);
+  const [clearingAll, setClearingAll] = useState(false);
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -402,8 +406,18 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       }
     }
 
+    if (!pickupObjectName.trim()) {
+      toast.error("Укажите название объекта (откуда). Например: Дом инвалида, Поликлиника 3. Диспетчер ориентируется по названию.");
+      return;
+    }
+
     if (!pickupCoords) {
       toast.error("Выберите точку на карте для места отправления");
+      return;
+    }
+
+    if (!dropoffObjectName.trim()) {
+      toast.error("Укажите название объекта (куда). Например: Поликлиника 3, Школа №5. Диспетчер ориентируется по названию.");
       return;
     }
 
@@ -432,7 +446,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       
       const orderData: any = {
         pickup_title: pickupTitle,
+        pickup_object_name: pickupObjectName.trim(),
         dropoff_title: dropoffTitle,
+        dropoff_object_name: dropoffObjectName.trim(),
         pickup_lat: pickupCoords.lat,
         pickup_lon: pickupCoords.lon,
         dropoff_lat: dropoffCoords.lat,
@@ -501,7 +517,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       setSelectedPassengerMode(null);
       setSelectedExistingPassengerId(null);
       setPickupAddress("");
+      setPickupObjectName("");
       setDropoffAddress("");
+      setDropoffObjectName("");
       setPickupCoords(null);
       setDropoffCoords(null);
       setPickupLatInput("");
@@ -1071,10 +1089,17 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           </button>
           <button 
             onClick={() => setExportModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 hidden"
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
           >
             <Download className="w-5 h-5" />
-            Экспорт по водителям
+            Экспорт
+          </button>
+          <button 
+            onClick={() => setClearAllModal(true)}
+            className="bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+          >
+            <X className="w-5 h-5" />
+            Очистить все заказы
           </button>
           <button 
             onClick={() => setCreateModal(true)}
@@ -1697,6 +1722,34 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               <p className="dark:text-white font-medium">{selectedOrder.id}</p>
             </div>
 
+            {getAvailableStatuses(selectedOrder.order.status).includes('cancelled') && (
+              <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200 mb-2">Отменить заказ</p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">Чтобы отменить заказ, выберите «Отменено» в статусе ниже или нажмите кнопку:</p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!editModal) return;
+                    setSaving(true);
+                    try {
+                      await ordersApi.updateOrderStatus(editModal, { status: 'cancelled', reason: 'Отменено диспетчером' });
+                      toast.success('Заказ отменён');
+                      await refreshOrders();
+                      setEditModal(null);
+                    } catch (err: any) {
+                      toast.error(err.response?.data?.error || 'Не удалось отменить заказ');
+                    } finally {
+                      setSaving(false);
+                    }
+                  }}
+                  disabled={saving}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm disabled:opacity-50"
+                >
+                  Отменить заказ
+                </button>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Статус</label>
               {getAvailableStatuses(selectedOrder.order.status).length > 0 ? (
@@ -1988,7 +2041,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           setGeocodeErrorDropoff(null);
           // Сброс состояния при закрытии
           setPickupAddress("");
+          setPickupObjectName("");
           setDropoffAddress("");
+          setDropoffObjectName("");
           setPickupCoords(null);
           setDropoffCoords(null);
           setPickupLatInput("");
@@ -2094,46 +2149,104 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             {/* Найденные пассажиры */}
             {matchingPassengers.length > 0 && selectedPassengerMode !== 'new' && (
               <div className="mb-3 space-y-2">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Найдены пассажиры:</p>
-                {matchingPassengers.map((passenger) => (
-                  <div
-                    key={passenger.id}
-                    className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                      selectedExistingPassengerId === passenger.id
-                        ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
-                        : 'border-gray-300 dark:border-gray-600 hover:border-indigo-300 dark:hover:border-indigo-700'
-                    }`}
-                    onClick={() => {
-                      setSelectedPassengerMode('existing');
-                      setSelectedExistingPassengerId(passenger.id);
-                    }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-medium dark:text-white">{passenger.full_name}</p>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">{passenger.user.phone}</p>
-                        {passenger.region && (
-                          <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
-                            Регион: {passenger.region.title}
-                          </p>
-                        )}
+                {selectedExistingPassengerId ? (
+                  /* Выбран один пассажир — показываем только его */
+                  (() => {
+                    const selected = matchingPassengers.find((p) => p.id === selectedExistingPassengerId);
+                    if (!selected) {
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-sm text-gray-500 dark:text-gray-400">Выбранный пассажир не найден в текущем поиске.</p>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedExistingPassengerId(null)}
+                            className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            Выбрать другого
+                          </button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2">
+                        <p className="text-sm text-gray-600 dark:text-gray-400">Выбран пассажир:</p>
+                        <div className="p-3 border border-indigo-500 rounded-lg bg-indigo-50 dark:bg-indigo-900/20">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-medium dark:text-white">{selected.full_name}</p>
+                              <p className="text-sm text-gray-600 dark:text-gray-400">{selected.user.phone}</p>
+                              {selected.region && (
+                                <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                                  Регион: {selected.region.title}
+                                </p>
+                              )}
+                            </div>
+                            <Check className="w-5 h-5 text-indigo-600 dark:text-indigo-400 flex-shrink-0" />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedExistingPassengerId(null);
+                            }}
+                            className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            Выбрать другого
+                          </button>
+                          <span className="text-gray-400">|</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPassengerMode('new');
+                              setSelectedExistingPassengerId(null);
+                            }}
+                            className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            Добавить нового пассажира
+                          </button>
+                        </div>
                       </div>
-                      {selectedExistingPassengerId === passenger.id && (
-                        <Check className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                      )}
-                    </div>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedPassengerMode('new');
-                    setSelectedExistingPassengerId(null);
-                  }}
-                  className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
-                >
-                  Добавить нового пассажира
-                </button>
+                    );
+                  })()
+                ) : (
+                  /* Список для выбора */
+                  <>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Найдены пассажиры:</p>
+                    {matchingPassengers.map((passenger) => (
+                      <div
+                        key={passenger.id}
+                        className="p-3 border border-gray-300 dark:border-gray-600 rounded-lg cursor-pointer transition-colors hover:border-indigo-300 dark:hover:border-indigo-700"
+                        onClick={() => {
+                          setSelectedPassengerMode('existing');
+                          setSelectedExistingPassengerId(passenger.id);
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="font-medium dark:text-white">{passenger.full_name}</p>
+                            <p className="text-sm text-gray-600 dark:text-gray-400">{passenger.user.phone}</p>
+                            {passenger.region && (
+                              <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                                Регион: {passenger.region.title}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPassengerMode('new');
+                        setSelectedExistingPassengerId(null);
+                      }}
+                      className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      Добавить нового пассажира
+                    </button>
+                  </>
+                )}
               </div>
             )}
 
@@ -2216,14 +2329,30 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
-                Откуда (адрес)
+                Название объекта (откуда) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={pickupObjectName}
+                onChange={(e) => setPickupObjectName(e.target.value)}
+                placeholder="Например: Дом инвалида, Поликлиника 3. Обязательно для диспетчера."
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Карта ищет по улице, диспетчер ориентируется по названию объекта
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                Откуда (адрес для карты)
               </label>
               <div className="relative">
                 <input
                   type="text"
                   value={pickupAddress}
                   onChange={(e) => handlePickupAddressChange(e.target.value)}
-                  placeholder="Введите адрес начала маршрута или выберите на карте"
+                  placeholder="Адрес или название заведения (Поликлиника 3, ул. Орманова 48)"
                   className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
                     geocodeErrorPickup
                       ? "border-red-300 dark:border-red-600"
@@ -2290,14 +2419,30 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
 
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
-                Куда (адрес)
+                Название объекта (куда) <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={dropoffObjectName}
+                onChange={(e) => setDropoffObjectName(e.target.value)}
+                placeholder="Например: Поликлиника 3, Школа №5. Обязательно для диспетчера."
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Карта ищет по улице, диспетчер ориентируется по названию объекта
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">
+                Куда (адрес для карты)
               </label>
               <div className="relative">
                 <input
                   type="text"
                   value={dropoffAddress}
                   onChange={(e) => handleDropoffAddressChange(e.target.value)}
-                  placeholder="Введите адрес назначения или выберите на карте"
+                  placeholder="Адрес или название заведения (Поликлиника 3, ул. Абая 15)"
                   className={`w-full px-4 py-2 pr-10 border rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white ${
                     geocodeErrorDropoff
                       ? "border-red-300 dark:border-red-600"
@@ -2649,11 +2794,56 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
         </div>
       </Modal>
 
+      {/* Clear All Orders Modal */}
+      <Modal
+        isOpen={clearAllModal}
+        onClose={() => setClearAllModal(false)}
+        title="Очистить все заказы"
+        size="md"
+      >
+        <div className="space-y-4">
+          <p className="text-red-600 dark:text-red-400 font-medium">
+            Внимание! Будут удалены все заказы из базы данных. Это действие необратимо.
+          </p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Завтра будут добавлять половину всех заказов — очистите список перед импортом.
+          </p>
+          <div className="flex gap-3 pt-4">
+            <button
+              onClick={async () => {
+                try {
+                  setClearingAll(true);
+                  const result = await ordersApi.clearAllOrders(true);
+                  toast.success(`Удалено заказов: ${result.deleted_count}`);
+                  await refreshOrders();
+                  setClearAllModal(false);
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || 'Ошибка очистки');
+                } finally {
+                  setClearingAll(false);
+                }
+              }}
+              disabled={clearingAll}
+              className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {clearingAll ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+              Подтвердить удаление
+            </button>
+            <button
+              onClick={() => setClearAllModal(false)}
+              className="flex-1 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Export Orders Modal */}
       <Modal
         isOpen={exportModal}
         onClose={() => setExportModal(false)}
-        title="Экспорт заказов по водителям"
+        title="Экспорт заказов"
         size="md"
         footer={
           <>
@@ -2661,26 +2851,30 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               onClick={() => setExportModal(false)}
               className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             >
-              Отмена
+              Закрыть
             </button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            <p className="font-medium mb-2">Выберите формат экспорта:</p>
+          </div>
+          <div className="flex flex-col gap-3">
             <button 
               onClick={async () => {
                 try {
                   setExporting(true);
-                  // Экспортируем все заказы с назначенными водителями (без фильтра по статусу для экспорта)
-                  const blob = await ordersApi.exportOrdersByDrivers();
-                  
-                  // Создаем ссылку и скачиваем файл
+                  const blob = await ordersApi.exportExcelTemplate();
                   const url = window.URL.createObjectURL(blob);
                   const link = document.createElement('a');
                   link.href = url;
-                  link.download = `orders_export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.zip`;
+                  link.download = `orders_template_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.xlsx`;
                   document.body.appendChild(link);
                   link.click();
                   document.body.removeChild(link);
                   window.URL.revokeObjectURL(url);
-                  
-                  toast.success("Экспорт завершен, файл скачан");
+                  toast.success("Экспорт Excel (шаблон) завершен");
                   setExportModal(false);
                 } catch (err: any) {
                   toast.error(err.response?.data?.error || err.message || "Ошибка экспорта");
@@ -2689,34 +2883,42 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 }
               }}
               disabled={exporting}
-              className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 disabled:opacity-50"
             >
-              {exporting ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Экспорт...
-                </>
-              ) : (
-                <>
-                  <Download className="w-5 h-5" />
-                  Экспортировать
-                </>
-              )}
+              {exporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+              Excel по шаблону (№, ФИО, откуда, куда, час, тел., без сопр)
             </button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <div className="text-sm text-gray-600 dark:text-gray-400">
-            <p>Будут экспортированы все заказы с назначенными водителями.</p>
-            <p className="mt-2">Для каждого водителя будет создан отдельный CSV файл.</p>
-            <p className="mt-2">Все файлы будут упакованы в ZIP архив.</p>
+            <button 
+              onClick={async () => {
+                try {
+                  setExporting(true);
+                  const blob = await ordersApi.exportOrdersByDrivers();
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `orders_export_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.zip`;
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  window.URL.revokeObjectURL(url);
+                  toast.success("Экспорт по водителям (ZIP) завершен");
+                  setExportModal(false);
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || err.message || "Ошибка экспорта");
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              disabled={exporting}
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-50"
+            >
+              {exporting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+              По водителям (ZIP с CSV)
+            </button>
           </div>
-          {selectedStatus !== "Все" && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-blue-700 dark:text-blue-300">
-              Будет применен фильтр по статусу: {statusMap[selectedStatus.toLowerCase()] || selectedStatus}
-            </div>
-          )}
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            <p>Шаблон Excel: №, Ф.И.О. Инвалида, откуда, куда (название объекта), час, номер тел., без сопр</p>
+          </div>
         </div>
       </Modal>
     </div>

@@ -25,18 +25,98 @@ class UserSerializer(serializers.ModelSerializer):
         return obj.role
 
 
+class PassengerCreateSerializer(serializers.Serializer):
+    """Сериализатор для создания пассажира (создаёт User + Passenger)"""
+    full_name = serializers.CharField(max_length=200, required=True)
+    phone = serializers.CharField(max_length=20, required=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    region_id = serializers.CharField(required=True)
+    disability_category = serializers.ChoiceField(
+        choices=[
+            ('I группа', 'I группа'),
+            ('II группа', 'II группа'),
+            ('III группа', 'III группа'),
+            ('Ребенок-инвалид', 'Ребенок-инвалид'),
+        ],
+        required=True
+    )
+    allowed_companion = serializers.BooleanField(required=False, default=False)
+
+    def validate_phone(self, value):
+        if not value or not str(value).strip():
+            raise serializers.ValidationError('Телефон обязателен')
+        cleaned = str(value).replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+        if not cleaned.isdigit() or len(cleaned) < 10:
+            raise serializers.ValidationError('Неверный формат телефона')
+        return value
+
+    def validate(self, attrs):
+        phone = attrs.get('phone')
+        if phone and User.objects.filter(phone=phone).exists():
+            raise serializers.ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
+        return attrs
+
+    def create(self, validated_data):
+        from regions.models import Region
+
+        phone = validated_data['phone']
+        email = (validated_data.get('email') or '').strip()
+        region_id = validated_data['region_id']
+
+        try:
+            region = Region.objects.get(id=region_id)
+        except Region.DoesNotExist:
+            raise serializers.ValidationError({'region_id': 'Регион не найден'})
+
+        username = f'passenger_{phone.replace("+", "").replace(" ", "").replace("-", "").replace("(", "").replace(")", "")}'
+        user = User.objects.create_user(
+            username=username,
+            phone=phone,
+            email=email or '',
+            password=None,
+            role='passenger',
+        )
+
+        return Passenger.objects.create(
+            user=user,
+            region=region,
+            full_name=validated_data['full_name'],
+            disability_category=validated_data['disability_category'],
+            allowed_companion=validated_data.get('allowed_companion', False),
+        )
+
+
 class PassengerSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     region = RegionSerializer(read_only=True)
     region_id = serializers.CharField(write_only=True, required=False)
+    phone = serializers.CharField(write_only=True, required=False)
+    email = serializers.EmailField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = Passenger
         fields = [
             'id', 'user', 'full_name', 'region', 'region_id',
-            'disability_category', 'allowed_companion'
+            'disability_category', 'allowed_companion', 'phone', 'email'
         ]
         read_only_fields = ['id']
+
+    def validate_phone(self, value):
+        """Валидация телефона"""
+        if not value or not str(value).strip():
+            return value
+        cleaned = str(value).replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+        if not cleaned.isdigit() or len(cleaned) < 10:
+            raise serializers.ValidationError('Неверный формат телефона')
+        return value
+
+    def validate(self, attrs):
+        """При обновлении: проверка уникальности телефона"""
+        if self.instance is not None and attrs.get('phone'):
+            phone = attrs['phone']
+            if User.objects.filter(phone=phone).exclude(id=self.instance.user.id).exists():
+                raise serializers.ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
+        return attrs
 
 
 class DriverSerializer(serializers.ModelSerializer):
@@ -268,6 +348,11 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
 
 class AdminUserUpdateSerializer(serializers.ModelSerializer):
     """Сериализатор для обновления админ-пользователя"""
+    email = serializers.EmailField(required=False, allow_blank=True)
+    phone = serializers.CharField(max_length=20, required=False)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False)
     role = serializers.ChoiceField(
         choices=['Admin', 'Dispatcher', 'Operator'],
         write_only=True,
@@ -280,6 +365,10 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
     
     def validate_phone(self, value):
         """Валидация телефона"""
+        if value is None:
+            return value
+        if isinstance(value, str) and not value.strip():
+            raise serializers.ValidationError('Телефон не может быть пустым')
         cleaned = value.replace('+', '').replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
         if not cleaned.isdigit() or len(cleaned) < 10:
             raise serializers.ValidationError('Неверный формат телефона')
@@ -291,11 +380,13 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
         email = attrs.get('email')
         instance = self.instance
         
-        if phone and User.objects.filter(phone=phone).exclude(id=instance.id).exists():
-            raise serializers.ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
+        if phone and str(phone).strip():
+            if User.objects.filter(phone=phone).exclude(id=instance.id).exists():
+                raise serializers.ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
         
-        if email and User.objects.filter(email=email).exclude(id=instance.id).exists():
-            raise serializers.ValidationError({'email': 'Пользователь с таким email уже существует'})
+        if email and str(email).strip():
+            if User.objects.filter(email=email).exclude(id=instance.id).exists():
+                raise serializers.ValidationError({'email': 'Пользователь с таким email уже существует'})
         
         return attrs
     
@@ -303,13 +394,18 @@ class AdminUserUpdateSerializer(serializers.ModelSerializer):
         """Обновление пользователя с изменением роли"""
         role = validated_data.pop('role', None)
         
-        # Обновляем поля пользователя
+        # Обновляем только переданные поля
+        update_fields = []
         for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+            if attr in ['email', 'phone', 'first_name', 'last_name', 'is_active']:
+                setattr(instance, attr, value)
+                update_fields.append(attr)
+        
+        if update_fields:
+            instance.save(update_fields=update_fields)
         
         # Обновляем группы если изменилась роль
-        if role:
+        if role is not None:
             instance.groups.clear()
             if role == 'Dispatcher':
                 group, _ = Group.objects.get_or_create(name='dispatcher')

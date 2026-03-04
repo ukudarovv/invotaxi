@@ -13,7 +13,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from .models import Passenger, Driver, UserActivityLog
 from regions.models import Region
 from .serializers import (
-    UserSerializer, PassengerSerializer, DriverSerializer, DriverCreateSerializer,
+    UserSerializer, PassengerSerializer, PassengerCreateSerializer, DriverSerializer, DriverCreateSerializer,
     PhoneLoginSerializer, VerifyOTPSerializer, EmailPasswordLoginSerializer,
     AdminUserSerializer, AdminUserCreateSerializer, AdminUserUpdateSerializer,
     PasswordResetSerializer, BulkActionSerializer, UserActivityLogSerializer
@@ -186,6 +186,11 @@ class PassengerViewSet(viewsets.ModelViewSet):
     serializer_class = PassengerSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return PassengerCreateSerializer
+        return PassengerSerializer
+
     def get_queryset(self):
         user = self.request.user
         queryset = super().get_queryset()
@@ -207,7 +212,11 @@ class PassengerViewSet(viewsets.ModelViewSet):
         """Создание пассажира - только для админов"""
         if not request.user.is_staff:
             raise PermissionDenied('Только администраторы могут создавать пассажиров')
-        return super().create(request, *args, **kwargs)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        passenger = serializer.save()
+        response_serializer = PassengerSerializer(passenger)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=self.get_success_headers(response_serializer.data))
 
     def update(self, request, *args, **kwargs):
         """Обновление пассажира - только для админов"""
@@ -215,7 +224,33 @@ class PassengerViewSet(viewsets.ModelViewSet):
             raise PermissionDenied('Только администраторы могут обновлять пассажиров')
         return super().update(request, *args, **kwargs)
 
-    def destroy(self, request, *args, **kwargs):
+    def perform_update(self, serializer):
+        """Обновление пассажира с обновлением User (phone, email)"""
+        passenger = serializer.instance
+        validated_data = serializer.validated_data
+        user_updated = False
+
+        # Обновляем поля User (phone, email) — убираем из validated_data, т.к. их нет в модели Passenger
+        if 'phone' in validated_data:
+            phone = validated_data.pop('phone')
+            if phone:
+                if User.objects.filter(phone=phone).exclude(id=passenger.user.id).exists():
+                    raise ValidationError({'phone': 'Пользователь с таким телефоном уже существует'})
+                passenger.user.phone = phone
+                user_updated = True
+
+        if 'email' in validated_data:
+            email = validated_data.pop('email', '') or ''
+            if email and User.objects.filter(email=email).exclude(id=passenger.user.id).exists():
+                raise ValidationError({'email': 'Пользователь с таким email уже существует'})
+            passenger.user.email = email
+            user_updated = True
+
+        serializer.save()
+
+        if user_updated:
+            passenger.user.save()
+
         """Удаление пассажира - только для админов"""
         if not request.user.is_staff:
             raise PermissionDenied('Только администраторы могут удалять пассажиров')

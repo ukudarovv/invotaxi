@@ -303,7 +303,21 @@ class Order(models.Model):
         verbose_name='Водитель'
     )
     pickup_title = models.CharField(max_length=500, verbose_name='Адрес отправления')
+    pickup_object_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Название объекта (откуда)',
+        help_text='Обязательное поле для диспетчера: например "Дом инвалида", "Поликлиника 3". Карта ищет по улице, диспетчер ориентируется по названию объекта.'
+    )
     dropoff_title = models.CharField(max_length=500, verbose_name='Адрес назначения')
+    dropoff_object_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name='Название объекта (куда)',
+        help_text='Обязательное поле для диспетчера: например "Поликлиника 3". Карта ищет по улице, диспетчер ориентируется по названию объекта.'
+    )
     pickup_lat = models.FloatField(verbose_name='Широта отправления')
     pickup_lon = models.FloatField(verbose_name='Долгота отправления')
     dropoff_lat = models.FloatField(verbose_name='Широта назначения')

@@ -21,7 +21,8 @@ interface Passenger {
   notes?: string;
 }
 
-const categories = ["Все", "Категория I", "Категория II", "Категория III"];
+const categories = ["Все", "I группа", "II группа", "III группа", "Ребенок-инвалид"];
+const disabilityOptions = ["I группа", "II группа", "III группа", "Ребенок-инвалид"];
 
 export function Passengers() {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
@@ -61,7 +62,7 @@ export function Passengers() {
       email: apiPassenger.user.email || "",
       region: apiPassenger.region?.title || "Не указано",
       region_id: apiPassenger.region?.id || "",
-      disability: apiPassenger.disability_category || "Не указано",
+      disability: apiPassenger.disability_category || "",
       companion: apiPassenger.allowed_companion || false,
       totalOrders: 0, // TODO: добавить в API если нужно
       registered: new Date().toLocaleDateString("ru-RU"), // TODO: добавить в API если нужно
@@ -144,47 +145,40 @@ export function Passengers() {
 
   const handleSavePassenger = async () => {
     try {
+      if (!formData.name?.trim() || !formData.phone?.trim() || !formData.disability) {
+        setError("Заполните обязательные поля: имя, телефон, категория инвалидности");
+        toast.error("Заполните обязательные поля");
+        return;
+      }
       if (editModal) {
-        // TODO: Реализовать обновление через API
-        // await passengersApi.updatePassenger(Number(editModal.id), formData);
-        setPassengers(
-          passengers.map((p) =>
-            p.id === editModal.id
-              ? {
-                  ...p,
-                  name: formData.name,
-                  phone: formData.phone,
-                  email: formData.email,
-                  region: formData.region,
-                  disability: formData.disability,
-                  companion: formData.companion,
-                  address: formData.address,
-                  notes: formData.notes,
-                }
-              : p
-          )
-        );
-      } else {
-        // TODO: Реализовать создание через API
-        // const newPassenger = await passengersApi.createPassenger(formData);
-        const newPassenger: Passenger = {
-          id: `PS${String(passengers.length + 1).padStart(3, "0")}`,
-          name: formData.name,
+        await passengersApi.updatePassenger(Number(editModal.id), {
+          full_name: formData.name,
+          region_id: formData.region_id || undefined,
+          disability_category: formData.disability || undefined,
+          allowed_companion: formData.companion,
           phone: formData.phone,
-          email: formData.email,
-          region: formData.region,
-          disability: formData.disability,
-          companion: formData.companion,
-          totalOrders: 0,
-          registered: new Date().toLocaleDateString("ru-RU"),
-          address: formData.address,
-          notes: formData.notes,
-        };
-        setPassengers([...passengers, newPassenger]);
+          email: formData.email || undefined,
+        });
+        toast.success("Пассажир обновлён");
+        await refreshPassengers();
+        setEditModal(null);
+      } else {
+        await passengersApi.createPassenger({
+          full_name: formData.name.trim(),
+          region_id: formData.region_id,
+          disability_category: formData.disability,
+          allowed_companion: formData.companion,
+          phone: formData.phone.trim(),
+          email: formData.email?.trim() || undefined,
+        });
+        toast.success("Пассажир создан");
+        await refreshPassengers();
       }
       setCreateModal(false);
     } catch (err: any) {
-      setError(err.message || "Ошибка сохранения пассажира");
+      const msg = err.response?.data?.phone?.[0] || err.response?.data?.email?.[0] || err.message || "Ошибка сохранения пассажира";
+      setError(msg);
+      toast.error(msg);
     }
   };
 
@@ -684,9 +678,9 @@ export function Passengers() {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">Выберите категорию</option>
-                <option value="Категория I">Категория I</option>
-                <option value="Категория II">Категория II</option>
-                <option value="Категория III">Категория III</option>
+                {disabilityOptions.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
               </select>
             </div>
           </div>

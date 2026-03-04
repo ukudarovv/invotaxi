@@ -18,6 +18,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
 from django.utils.dateparse import parse_datetime
+import openpyxl
+from openpyxl.styles import Font, Alignment
 
 logger = logging.getLogger(__name__)
 
@@ -600,9 +602,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         if not pickup_lat or not pickup_lon or not dropoff_lat or not dropoff_lon:
             raise ValueError('Не указаны координаты pickup или dropoff')
         
-        # Адреса
-        pickup_title = row_normalized.get('pickup_title', '').strip() or f'{pickup_lat}, {pickup_lon}'
+        # Адреса (откуда = адрес, откуда_объект или pickup_object_name = название объекта)
+        pickup_title = row_normalized.get('pickup_title', row_normalized.get('откуда', '')).strip() or f'{pickup_lat}, {pickup_lon}'
+        pickup_object_name = row_normalized.get('pickup_object_name', row_normalized.get('откуда_объект', row_normalized.get('object_name_from', ''))).strip() or pickup_title
         dropoff_title = row_normalized.get('dropoff_title', '').strip() or f'{dropoff_lat}, {dropoff_lon}'
+        dropoff_object_name = row_normalized.get('dropoff_object_name', row_normalized.get('куда', row_normalized.get('object_name', ''))).strip() or dropoff_title
         
         # Время забора
         desired_pickup_time_str = row_normalized.get('desired_pickup_time', '').strip()
@@ -643,7 +647,9 @@ class OrderViewSet(viewsets.ModelViewSet):
         return {
             'passenger': passenger.id,
             'pickup_title': pickup_title,
+            'pickup_object_name': pickup_object_name,
             'dropoff_title': dropoff_title,
+            'dropoff_object_name': dropoff_object_name,
             'pickup_lat': pickup_lat,
             'pickup_lon': pickup_lon,
             'dropoff_lat': dropoff_lat,
@@ -874,10 +880,24 @@ class OrderViewSet(viewsets.ModelViewSet):
                     order_data.get('куда')
                 )
                 
+                pickup_object_name = (
+                    order_data.get('pickup_object_name') or
+                    order_data.get('object_name_from') or
+                    order_data.get('название_объекта_откуда') or
+                    pickup_address
+                )
+                dropoff_object_name = (
+                    order_data.get('dropoff_object_name') or
+                    order_data.get('object_name') or
+                    order_data.get('название_объекта') or
+                    dropoff_address
+                )
                 order_dict = {
                     'passenger_id': passenger.id,
                     'pickup_title': pickup_address,
+                    'pickup_object_name': (pickup_object_name or '').strip() or None,
                     'dropoff_title': dropoff_address,
+                    'dropoff_object_name': (dropoff_object_name or '').strip() or None,
                     'pickup_lat': order_data.get('pickup_lat'),
                     'pickup_lon': order_data.get('pickup_lon'),
                     'dropoff_lat': order_data.get('dropoff_lat'),
@@ -1096,6 +1116,114 @@ class OrderViewSet(viewsets.ModelViewSet):
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         response = HttpResponse(zip_buffer.read(), content_type='application/zip')
         response['Content-Disposition'] = f'attachment; filename="orders_export_{timestamp}.zip"'
+        return response
+
+    @action(detail=False, methods=['post'], url_path='clear-all')
+    def clear_all_orders(self, request):
+        """
+        Очистить все заказы. Требует подтверждения через параметр confirm=true.
+        """
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Нет прав для очистки заказов'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        confirm = request.data.get('confirm') or request.query_params.get('confirm')
+        if str(confirm).lower() not in ('true', '1', 'yes'):
+            count = Order.objects.count()
+            return Response(
+                {
+                    'message': f'Для подтверждения очистки передайте confirm=true. Будет удалено заказов: {count}',
+                    'orders_count': count
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        count = Order.objects.count()
+        Order.objects.all().delete()
+        logger.info(f'Пользователь {request.user} очистил все заказы. Удалено: {count}')
+        return Response({
+            'success': True,
+            'deleted_count': count,
+            'message': f'Удалено заказов: {count}'
+        })
+
+    @action(detail=False, methods=['get'], url_path='export-excel-template')
+    def export_excel_template(self, request):
+        """
+        Экспорт заказов в Excel по шаблону для диспетчера.
+        Формат: №, Ф.И.О. Инвалида, откуда, куда (название объекта), час, номер тел., без сопр
+        Группировка по водителям (если заказы назначены).
+        """
+        if not request.user.is_staff:
+            return Response(
+                {'error': 'Нет прав для экспорта'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        status_filter = request.query_params.get('status')
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+
+        queryset = Order.objects.select_related('passenger', 'driver', 'passenger__user', 'driver__user').all()
+        if status_filter:
+            statuses = [s.strip() for s in status_filter.split(',')]
+            queryset = queryset.filter(status__in=statuses)
+        if date_from:
+            queryset = queryset.filter(created_at__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__lte=date_to)
+        queryset = queryset.order_by('driver', 'desired_pickup_time')
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Заказы"
+
+        # Заголовки шаблона: №, Ф.И.О. Инвалида, откуда, куда, час, номер тел., без сопр
+        headers = ['№', 'Ф.И.О. Инвалида', 'откуда', 'куда', 'час', 'номер тел.', 'без сопр']
+        header_font = Font(bold=True)
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=2, column=col, value=h)
+            cell.font = header_font
+
+        row_num = 3
+        current_driver_id = None
+        order_idx = 0
+        for order in queryset:
+            if order.driver_id != current_driver_id:
+                current_driver_id = order.driver_id
+                if order.driver:
+                    driver_info = f"{order.driver.name} {order.driver.car_model or ''} {order.driver.plate_number or ''} {order.driver.user.phone if order.driver.user else ''} {order.driver.region.title if order.driver.region else ''}"
+                else:
+                    driver_info = "Неназначенные заказы"
+                ws.cell(row=row_num, column=1, value=driver_info)
+                ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=len(headers))
+                row_num += 1
+
+            order_idx += 1
+            dropoff_display = (order.dropoff_object_name or order.dropoff_title or '').strip()
+            phone = order.passenger.user.phone if order.passenger and order.passenger.user else ''
+            without_escort = 'без сопр' if not order.has_companion else ''
+            time_str = order.desired_pickup_time.strftime('%H:%M') if order.desired_pickup_time else ''
+
+            ws.cell(row=row_num, column=1, value=order_idx)
+            ws.cell(row=row_num, column=2, value=order.passenger.full_name if order.passenger else '')
+            pickup_display = (order.pickup_object_name or order.pickup_title or '').strip()
+            ws.cell(row=row_num, column=3, value=pickup_display)
+            ws.cell(row=row_num, column=4, value=dropoff_display)
+            ws.cell(row=row_num, column=5, value=time_str)
+            ws.cell(row=row_num, column=6, value=phone)
+            ws.cell(row=row_num, column=7, value=without_escort)
+            row_num += 1
+
+        for col in range(1, len(headers) + 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col)].width = 18
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = f'attachment; filename="orders_template_{timestamp}.xlsx"'
         return response
 
     @action(detail=False, methods=['post'], url_path='geocode')

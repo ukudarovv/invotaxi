@@ -79,6 +79,39 @@ export const passengersApi = {
   },
 
   /**
+   * Создать пассажира
+   */
+  async createPassenger(data: {
+    full_name: string;
+    region_id: string;
+    disability_category: string;
+    allowed_companion?: boolean;
+    phone: string;
+    email?: string;
+  }): Promise<Passenger> {
+    const response = await api.post<Passenger>('/passengers/', data);
+    return response.data;
+  },
+
+  /**
+   * Обновить пассажира
+   */
+  async updatePassenger(
+    passengerId: number,
+    data: {
+      full_name?: string;
+      region_id?: string;
+      disability_category?: string;
+      allowed_companion?: boolean;
+      phone?: string;
+      email?: string;
+    }
+  ): Promise<Passenger> {
+    const response = await api.patch<Passenger>(`/passengers/${passengerId}/`, data);
+    return response.data;
+  },
+
+  /**
    * Поиск пассажиров по телефону
    */
   async searchPassengersByPhone(phone: string): Promise<Passenger[]> {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Search, MapPin, Loader2 } from "lucide-react";
+import { MapPin } from "lucide-react";
 
 // Границы Атырауской области для ограничения поиска
 const ATYRAU_BOUNDS: [number[], number[]] = [
@@ -18,11 +18,6 @@ interface RouteMapPickerProps {
   initialPickup?: { lat: number; lon: number; address?: string };
   initialDropoff?: { lat: number; lon: number; address?: string };
   selectionMode?: "pickup" | "dropoff" | "both";
-}
-
-interface SuggestItem {
-  displayName: string;
-  value: string;
 }
 
 export function RouteMapPicker({
@@ -51,43 +46,18 @@ export function RouteMapPicker({
   const [currentMode, setCurrentMode] = useState<"pickup" | "dropoff">("pickup");
   const [ready, setReady] = useState(false);
 
-  const [pickupSearch, setPickupSearch] = useState("");
-  const [dropoffSearch, setDropoffSearch] = useState("");
   const [pickupAddress, setPickupAddress] = useState(initialPickup?.address || "");
   const [dropoffAddress, setDropoffAddress] = useState(initialDropoff?.address || "");
-
-  const [pickupSuggestions, setPickupSuggestions] = useState<SuggestItem[]>([]);
-  const [dropoffSuggestions, setDropoffSuggestions] = useState<SuggestItem[]>([]);
-  const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
-  const [showDropoffSuggestions, setShowDropoffSuggestions] = useState(false);
-  const [geocoding, setGeocoding] = useState(false);
 
   const pickupCoordsRef = useRef(pickupCoords);
   const dropoffCoordsRef = useRef(dropoffCoords);
   const currentModeRef = useRef(currentMode);
-  const suggestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pickupInputRef = useRef<HTMLDivElement>(null);
-  const dropoffInputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { pickupCoordsRef.current = pickupCoords; }, [pickupCoords]);
   useEffect(() => { dropoffCoordsRef.current = dropoffCoords; }, [dropoffCoords]);
   useEffect(() => { currentModeRef.current = currentMode; }, [currentMode]);
 
   useEffect(() => { ymaps.ready(() => setReady(true)); }, []);
-
-  // Закрытие подсказок при клике вне
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (pickupInputRef.current && !pickupInputRef.current.contains(e.target as Node)) {
-        setShowPickupSuggestions(false);
-      }
-      if (dropoffInputRef.current && !dropoffInputRef.current.contains(e.target as Node)) {
-        setShowDropoffSuggestions(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
 
   const updateRoute = useCallback(() => {
     if (!mapInstanceRef.current) return;
@@ -145,7 +115,6 @@ export function RouteMapPicker({
       pickupCoordsRef.current = newCoords;
       const addr = await reverseGeocode(coords[0], coords[1]);
       setPickupAddress(addr);
-      setPickupSearch(addr);
       pickupMarkerRef.current!.properties.set({
         iconCaption: addr,
         balloonContentBody: addr,
@@ -178,7 +147,6 @@ export function RouteMapPicker({
       dropoffCoordsRef.current = newCoords;
       const addr = await reverseGeocode(coords[0], coords[1]);
       setDropoffAddress(addr);
-      setDropoffSearch(addr);
       dropoffMarkerRef.current!.properties.set({
         iconCaption: addr,
         balloonContentBody: addr,
@@ -219,101 +187,6 @@ export function RouteMapPicker({
     }
   }, [addDropoffMarker]);
 
-  // Подсказки адресов (suggest)
-  const fetchSuggestions = useCallback(async (query: string, type: "pickup" | "dropoff") => {
-    if (!query.trim() || query.trim().length < 2) {
-      if (type === "pickup") setPickupSuggestions([]);
-      else setDropoffSuggestions([]);
-      return;
-    }
-    try {
-      const items = await ymaps.suggest("Атырау, " + query, {
-        boundedBy: ATYRAU_BOUNDS,
-        results: 7,
-      });
-      const suggestions = items.map((item: any) => ({
-        displayName: item.displayName,
-        value: item.value,
-      }));
-      if (type === "pickup") {
-        setPickupSuggestions(suggestions);
-        setShowPickupSuggestions(suggestions.length > 0);
-      } else {
-        setDropoffSuggestions(suggestions);
-        setShowDropoffSuggestions(suggestions.length > 0);
-      }
-    } catch (err) {
-      console.error("Ошибка получения подсказок:", err);
-    }
-  }, []);
-
-  const handleSearchInput = useCallback((value: string, type: "pickup" | "dropoff") => {
-    if (type === "pickup") setPickupSearch(value);
-    else setDropoffSearch(value);
-
-    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current);
-    suggestTimerRef.current = setTimeout(() => fetchSuggestions(value, type), 300);
-  }, [fetchSuggestions]);
-
-  // Геокодирование адреса
-  const geocodeAddress = useCallback(async (query: string, type: "pickup" | "dropoff") => {
-    if (!query.trim() || !mapInstanceRef.current) return;
-    setGeocoding(true);
-    setShowPickupSuggestions(false);
-    setShowDropoffSuggestions(false);
-    try {
-      const result = await ymaps.geocode(query, {
-        results: 1,
-        boundedBy: ATYRAU_BOUNDS,
-        strictBounds: true,
-      } as any);
-      const firstGeoObject = result.geoObjects.get(0);
-      if (firstGeoObject) {
-        const coords = firstGeoObject.geometry.getCoordinates();
-        const address: string =
-          firstGeoObject.getAddressLine?.() ||
-          firstGeoObject.properties.get("text") ||
-          query;
-
-        mapInstanceRef.current!.setCenter(coords, 16);
-
-        if (type === "pickup") {
-          const newCoords = { lat: coords[0], lon: coords[1] };
-          setPickupCoords(newCoords);
-          pickupCoordsRef.current = newCoords;
-          setPickupAddress(address);
-          setPickupSearch(address);
-          addPickupMarker(coords[0], coords[1], address);
-          onPickupChange?.(coords[0], coords[1], address);
-        } else {
-          const newCoords = { lat: coords[0], lon: coords[1] };
-          setDropoffCoords(newCoords);
-          dropoffCoordsRef.current = newCoords;
-          setDropoffAddress(address);
-          setDropoffSearch(address);
-          addDropoffMarker(coords[0], coords[1], address);
-          onDropoffChange?.(coords[0], coords[1], address);
-        }
-        updateRoute();
-      }
-    } catch (err) {
-      console.error("Ошибка геокодирования:", err);
-    } finally {
-      setGeocoding(false);
-    }
-  }, [addPickupMarker, addDropoffMarker, onPickupChange, onDropoffChange, updateRoute]);
-
-  const handleSuggestionSelect = useCallback((suggestion: SuggestItem, type: "pickup" | "dropoff") => {
-    if (type === "pickup") {
-      setPickupSearch(suggestion.value);
-      setShowPickupSuggestions(false);
-    } else {
-      setDropoffSearch(suggestion.value);
-      setShowDropoffSuggestions(false);
-    }
-    geocodeAddress(suggestion.value, type);
-  }, [geocodeAddress]);
-
   // Инициализация карты
   useEffect(() => {
     if (!ready || !mapRef.current || mapInstanceRef.current) return;
@@ -348,7 +221,6 @@ export function RouteMapPicker({
           setPickupCoords(newCoords);
           pickupCoordsRef.current = newCoords;
           setPickupAddress(addr);
-          setPickupSearch(addr);
           addPickupMarker(lat, lon, addr);
           onPickupChange?.(lat, lon, addr);
           setCurrentMode("dropoff");
@@ -358,7 +230,6 @@ export function RouteMapPicker({
           setDropoffCoords(newCoords);
           dropoffCoordsRef.current = newCoords;
           setDropoffAddress(addr);
-          setDropoffSearch(addr);
           addDropoffMarker(lat, lon, addr);
           onDropoffChange?.(lat, lon, addr);
           setCurrentMode("pickup");
@@ -369,7 +240,6 @@ export function RouteMapPicker({
             setPickupCoords(newCoords);
             pickupCoordsRef.current = newCoords;
             setPickupAddress(addr);
-            setPickupSearch(addr);
             updatePickupMarker(lat, lon, addr);
             onPickupChange?.(lat, lon, addr);
             setCurrentMode("dropoff");
@@ -379,7 +249,6 @@ export function RouteMapPicker({
             setDropoffCoords(newCoords);
             dropoffCoordsRef.current = newCoords;
             setDropoffAddress(addr);
-            setDropoffSearch(addr);
             updateDropoffMarker(lat, lon, addr);
             onDropoffChange?.(lat, lon, addr);
             setCurrentMode("pickup");
@@ -391,7 +260,6 @@ export function RouteMapPicker({
         setPickupCoords(newCoords);
         pickupCoordsRef.current = newCoords;
         setPickupAddress(addr);
-        setPickupSearch(addr);
         updatePickupMarker(lat, lon, addr);
         onPickupChange?.(lat, lon, addr);
       } else {
@@ -399,7 +267,6 @@ export function RouteMapPicker({
         setDropoffCoords(newCoords);
         dropoffCoordsRef.current = newCoords;
         setDropoffAddress(addr);
-        setDropoffSearch(addr);
         updateDropoffMarker(lat, lon, addr);
         onDropoffChange?.(lat, lon, addr);
       }
@@ -432,7 +299,7 @@ export function RouteMapPicker({
     } else if (!initialPickup && pickupCoordsRef.current && mapInstanceRef.current) {
       if (pickupMarkerRef.current) { mapInstanceRef.current.geoObjects.remove(pickupMarkerRef.current); pickupMarkerRef.current = null; }
       setPickupCoords(null); pickupCoordsRef.current = null;
-      setPickupAddress(""); setPickupSearch("");
+      setPickupAddress("");
       updateRoute();
     }
   }, [initialPickup?.lat, initialPickup?.lon, updatePickupMarker, updateRoute]);
@@ -450,144 +317,13 @@ export function RouteMapPicker({
     } else if (!initialDropoff && dropoffCoordsRef.current && mapInstanceRef.current) {
       if (dropoffMarkerRef.current) { mapInstanceRef.current.geoObjects.remove(dropoffMarkerRef.current); dropoffMarkerRef.current = null; }
       setDropoffCoords(null); dropoffCoordsRef.current = null;
-      setDropoffAddress(""); setDropoffSearch("");
+      setDropoffAddress("");
       updateRoute();
     }
   }, [initialDropoff?.lat, initialDropoff?.lon, updateDropoffMarker, updateRoute]);
 
   return (
     <div className="space-y-3">
-      {/* Поисковые поля с подсказками */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {/* Поиск "Откуда" */}
-        <div ref={pickupInputRef} className="relative">
-          <label className="block text-xs font-medium text-green-700 dark:text-green-400 mb-1">
-            <MapPin className="w-3 h-3 inline mr-1" />
-            Откуда (A)
-          </label>
-          <div className="flex gap-1">
-            <div className="relative flex-1">
-              <input
-                type="text"
-                value={pickupSearch}
-                onChange={(e) => handleSearchInput(e.target.value, "pickup")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    geocodeAddress(pickupSearch, "pickup");
-                  }
-                }}
-                onFocus={() => pickupSuggestions.length > 0 && setShowPickupSuggestions(true)}
-                placeholder="Введите адрес в Атырау..."
-                className="w-full px-3 py-2 pr-8 text-sm border border-green-300 dark:border-green-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 dark:bg-gray-700 dark:text-white"
-              />
-              {geocoding && (
-                <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-green-600" />
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => geocodeAddress(pickupSearch, "pickup")}
-              className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-              title="Найти адрес"
-            >
-              <Search className="w-4 h-4" />
-            </button>
-          </div>
-          {/* Подсказки */}
-          {showPickupSuggestions && pickupSuggestions.length > 0 && (
-            <ul className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {pickupSuggestions.map((s, i) => (
-                <li
-                  key={i}
-                  onClick={() => handleSuggestionSelect(s, "pickup")}
-                  className="px-3 py-2 text-sm cursor-pointer hover:bg-green-50 dark:hover:bg-green-900/30 text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
-                >
-                  <MapPin className="w-3 h-3 inline mr-2 text-green-500" />
-                  {s.displayName}
-                </li>
-              ))}
-            </ul>
-          )}
-          {pickupAddress && (
-            <p className="mt-1 text-xs text-green-700 dark:text-green-400 truncate" title={pickupAddress}>
-              ✓ {pickupAddress}
-            </p>
-          )}
-        </div>
-
-        {/* Поиск "Куда" */}
-        <div ref={dropoffInputRef} className="relative">
-          <label className="block text-xs font-medium text-red-700 dark:text-red-400 mb-1">
-            <MapPin className="w-3 h-3 inline mr-1" />
-            Куда (B)
-          </label>
-          <div className="flex gap-1">
-            <div className="relative flex-1">
-              <input
-                type="text"
-                value={dropoffSearch}
-                onChange={(e) => handleSearchInput(e.target.value, "dropoff")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    geocodeAddress(dropoffSearch, "dropoff");
-                  }
-                }}
-                onFocus={() => dropoffSuggestions.length > 0 && setShowDropoffSuggestions(true)}
-                placeholder="Введите адрес в Атырау..."
-                className="w-full px-3 py-2 pr-8 text-sm border border-red-300 dark:border-red-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 dark:bg-gray-700 dark:text-white"
-              />
-              {geocoding && (
-                <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-red-600" />
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => geocodeAddress(dropoffSearch, "dropoff")}
-              className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
-              title="Найти адрес"
-            >
-              <Search className="w-4 h-4" />
-            </button>
-          </div>
-          {/* Подсказки */}
-          {showDropoffSuggestions && dropoffSuggestions.length > 0 && (
-            <ul className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-              {dropoffSuggestions.map((s, i) => (
-                <li
-                  key={i}
-                  onClick={() => handleSuggestionSelect(s, "dropoff")}
-                  className="px-3 py-2 text-sm cursor-pointer hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
-                >
-                  <MapPin className="w-3 h-3 inline mr-2 text-red-500" />
-                  {s.displayName}
-                </li>
-              ))}
-            </ul>
-          )}
-          {dropoffAddress && (
-            <p className="mt-1 text-xs text-red-700 dark:text-red-400 truncate" title={dropoffAddress}>
-              ✓ {dropoffAddress}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Кнопки выбора режима */}
-      {selectionMode === "both" && (
-        <div className="flex gap-2">
-          <button type="button" onClick={() => setCurrentMode("pickup")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${currentMode === "pickup" ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 ring-2 ring-green-400" : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
-            <MapPin className="w-3 h-3 inline mr-1" /> Выбрать "Откуда"
-          </button>
-          <button type="button" onClick={() => setCurrentMode("dropoff")}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${currentMode === "dropoff" ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 ring-2 ring-red-400" : "bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300"}`}>
-            <MapPin className="w-3 h-3 inline mr-1" /> Выбрать "Куда"
-          </button>
-        </div>
-      )}
-
       {/* Карта */}
       <div ref={mapRef} style={{ height }} className="w-full rounded-lg border border-gray-200 dark:border-gray-700" />
 

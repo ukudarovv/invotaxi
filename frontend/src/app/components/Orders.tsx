@@ -11,6 +11,8 @@ import { RouteMapView } from "./RouteMapView";
 import { toast } from "sonner";
 import { debounce } from "../utils/debounce";
 import { useAuth } from "../context/AuthContext";
+import PhoneInput from "react-phone-number-input";
+import "react-phone-number-input/style.css";
 
 const statuses = ["Все", "Ожидание", "В пути", "Выполнено", "Отменён"];
 
@@ -36,7 +38,7 @@ interface OrdersProps {
   onOrderClose?: () => void;
 }
 
-type SortField = 'id' | 'created_at' | 'status' | 'price' | 'passenger';
+type SortField = 'id' | 'created_at' | 'status' | 'passenger';
 type SortDirection = 'asc' | 'desc';
 
 export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
@@ -59,6 +61,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   const [createModal, setCreateModal] = useState(false);
   const [editingStatus, setEditingStatus] = useState<string>("");
   const [editingNote, setEditingNote] = useState<string>("");
+  const [editingOrderDate, setEditingOrderDate] = useState<string>("");
+  const [editingOrderTime, setEditingOrderTime] = useState<string>("");
   const [saving, setSaving] = useState(false);
   
   // Состояние для создания заказа
@@ -72,6 +76,10 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   const [orderDate, setOrderDate] = useState<string>("");
   const [orderTime, setOrderTime] = useState<string>("");
   const [orderNote, setOrderNote] = useState("");
+  const [orderHasCompanion, setOrderHasCompanion] = useState(false);
+  const [isRoundTrip, setIsRoundTrip] = useState(false);
+  const [returnDate, setReturnDate] = useState<string>("");
+  const [returnTime, setReturnTime] = useState<string>("");
   const [creatingOrder, setCreatingOrder] = useState(false);
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   
@@ -192,7 +200,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   // Debounced search for passengers by phone
   useEffect(() => {
     const searchPassengers = async () => {
-      if (!passengerPhone || passengerPhone.trim().length < 3) {
+      if (!passengerPhone || passengerPhone.trim().length < 4) {
         setMatchingPassengers([]);
         // Если телефон полностью очищен, сбрасываем все
         if (!passengerPhone || passengerPhone.trim().length === 0) {
@@ -230,7 +238,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
 
     const timeoutId = setTimeout(() => {
       searchPassengers();
-    }, 600);
+    }, 300);
 
     return () => clearTimeout(timeoutId);
   }, [passengerPhone, selectedPassengerMode]);
@@ -402,6 +410,48 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     }
   }, [dropoffCoords?.lat, dropoffCoords?.lon]);
 
+  // Валидация формы создания заказа (все поля кроме Примечания обязательны)
+  const isCreateOrderFormValid = useCallback(() => {
+    if (!passengerPhone || passengerPhone.trim().length === 0) return false;
+
+    const useExistingPassenger =
+      (selectedPassengerMode === 'existing' && selectedExistingPassengerId) ||
+      (matchingPassengers.length > 0 && selectedPassengerMode !== 'new');
+
+    if (!useExistingPassenger) {
+      if (!passengerName || passengerName.trim().length === 0) return false;
+      if (!passengerDisabilityCategory) return false;
+    }
+
+    if (!pickupObjectName.trim()) return false;
+    if (!pickupCoords) return false;
+    if (!dropoffObjectName.trim()) return false;
+    if (!dropoffCoords) return false;
+    if (!orderDate || !orderTime) return false;
+
+    if (isRoundTrip) {
+      if (!returnDate || !returnTime) return false;
+    }
+
+    return true;
+  }, [
+    passengerPhone,
+    passengerName,
+    passengerDisabilityCategory,
+    selectedPassengerMode,
+    selectedExistingPassengerId,
+    matchingPassengers.length,
+    pickupObjectName,
+    pickupCoords,
+    dropoffObjectName,
+    dropoffCoords,
+    orderDate,
+    orderTime,
+    isRoundTrip,
+    returnDate,
+    returnTime,
+  ]);
+
   // Обработчик создания заказа
   const handleCreateOrder = async () => {
     // Валидация пассажира
@@ -462,6 +512,11 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       return;
     }
 
+    if (isRoundTrip && (!returnDate || !returnTime)) {
+      toast.error("Укажите дату и время обратной поездки");
+      return;
+    }
+
     try {
       setCreatingOrder(true);
 
@@ -470,65 +525,68 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       const desiredPickupTime = new Date(orderDate);
       desiredPickupTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
-      // Создаем заказ
       // Используем адрес, если указан, иначе используем координаты как адрес
-      const pickupTitle = pickupAddress.trim() || `${pickupCoords.lat.toFixed(6)}, ${pickupCoords.lon.toFixed(6)}`;
-      const dropoffTitle = dropoffAddress.trim() || `${dropoffCoords.lat.toFixed(6)}, ${dropoffCoords.lon.toFixed(6)}`;
-      
-      const orderData: any = {
-        pickup_title: pickupTitle,
-        pickup_object_name: pickupObjectName.trim(),
-        dropoff_title: dropoffTitle,
-        dropoff_object_name: dropoffObjectName.trim(),
-        pickup_lat: pickupCoords.lat,
-        pickup_lon: pickupCoords.lon,
-        dropoff_lat: dropoffCoords.lat,
-        dropoff_lon: dropoffCoords.lon,
-        desired_pickup_time: desiredPickupTime.toISOString(),
-        note: orderNote.trim() || undefined,
-        has_companion: false,
+      const pickupTitle = pickupAddress.trim() || `${pickupCoords!.lat.toFixed(6)}, ${pickupCoords!.lon.toFixed(6)}`;
+      const dropoffTitle = dropoffAddress.trim() || `${dropoffCoords!.lat.toFixed(6)}, ${dropoffCoords!.lon.toFixed(6)}`;
+
+      const buildOrderData = (pickup: { title: string; objectName: string; lat: number; lon: number }, dropoff: { title: string; objectName: string; lat: number; lon: number }, time: Date, note?: string) => {
+        const data: any = {
+          pickup_title: pickup.title,
+          pickup_object_name: pickup.objectName,
+          dropoff_title: dropoff.title,
+          dropoff_object_name: dropoff.objectName,
+          pickup_lat: pickup.lat,
+          pickup_lon: pickup.lon,
+          dropoff_lat: dropoff.lat,
+          dropoff_lon: dropoff.lon,
+          desired_pickup_time: time.toISOString(),
+          note: note?.trim() || undefined,
+          has_companion: orderHasCompanion,
+        };
+        if (useExistingPassenger && passengerIdToUse) {
+          data.passenger_id = passengerIdToUse;
+        } else {
+          const trimmedPhone = passengerPhone.trim();
+          data.passenger_phone = trimmedPhone;
+          if (useNewPassenger || passengerName || passengerDisabilityCategory) {
+            data.passenger_name = passengerName.trim() || `Пассажир ${trimmedPhone}`;
+            if (passengerRegionId) data.passenger_region_id = passengerRegionId;
+            data.passenger_disability_category = passengerDisabilityCategory || 'III группа';
+            data.passenger_allowed_companion = passengerAllowedCompanion;
+          }
+        }
+        return data;
       };
 
-      // Если выбран существующий пассажир и есть ID
-      if (useExistingPassenger && passengerIdToUse) {
-        orderData.passenger_id = passengerIdToUse;
-        console.log('Используем существующего пассажира:', passengerIdToUse);
-      } else {
-        // Создаем нового пассажира или используем телефон для поиска
-        // Проверяем, что телефон не пустой перед отправкой
-        const trimmedPhone = passengerPhone.trim();
-        if (!trimmedPhone) {
-          toast.error("Телефон пассажира не может быть пустым");
-          setCreatingOrder(false);
-          return;
-        }
-        
-        orderData.passenger_phone = trimmedPhone;
-        
-        // Если режим "new" или данные для нового пассажира заполнены, передаем их
-        if (useNewPassenger || passengerName || passengerDisabilityCategory) {
-          orderData.passenger_name = passengerName.trim() || `Пассажир ${trimmedPhone}`;
-          if (passengerRegionId) {
-            orderData.passenger_region_id = passengerRegionId;
-          }
-          orderData.passenger_disability_category = passengerDisabilityCategory || 'III группа';
-          orderData.passenger_allowed_companion = passengerAllowedCompanion;
-          console.log('Создаем нового пассажира:', {
-            phone: orderData.passenger_phone,
-            name: orderData.passenger_name,
-            category: orderData.passenger_disability_category,
-            region: orderData.passenger_region_id
-          });
-        } else {
-          // Если режим "existing", но ID не найден, передаем только телефон для поиска
-          console.log('Ищем существующего пассажира по телефону:', orderData.passenger_phone);
-        }
+      const pickupData = { title: pickupTitle, objectName: pickupObjectName.trim(), lat: pickupCoords!.lat, lon: pickupCoords!.lon };
+      const dropoffData = { title: dropoffTitle, objectName: dropoffObjectName.trim(), lat: dropoffCoords!.lat, lon: dropoffCoords!.lon };
+
+      // Заказ "туда" (A -> B)
+      const orderDataThere = buildOrderData(pickupData, dropoffData, desiredPickupTime, orderNote);
+      if (!useExistingPassenger && !orderDataThere.passenger_phone) {
+        toast.error("Телефон пассажира не может быть пустым");
+        setCreatingOrder(false);
+        return;
       }
 
-      console.log('Отправляем данные заказа:', orderData);
-      const newOrder = await ordersApi.createOrder(orderData);
-      
-      toast.success("Заказ успешно создан!");
+      console.log('Отправляем данные заказа (туда):', orderDataThere);
+      const newOrderThere = await ordersApi.createOrder(orderDataThere);
+
+      if (isRoundTrip) {
+        // Заказ "обратно" (B -> A) — точки меняются местами
+        const [retHours, retMinutes] = returnTime.split(':');
+        const returnPickupTime = new Date(returnDate);
+        returnPickupTime.setHours(parseInt(retHours), parseInt(retMinutes), 0, 0);
+
+        const returnOrderData = buildOrderData(dropoffData, pickupData, returnPickupTime, orderNote);
+        returnOrderData.passenger_id = newOrderThere.passenger.id;
+
+        console.log('Отправляем данные заказа (обратно):', returnOrderData);
+        await ordersApi.createOrder(returnOrderData);
+        toast.success("Заказы «туда» и «обратно» успешно созданы!");
+      } else {
+        toast.success("Заказ успешно создан!");
+      }
       
       // Обновляем список заказов
       loadOrders();
@@ -552,12 +610,16 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       setDropoffObjectName("");
       setPickupCoords(null);
       setDropoffCoords(null);
+      setOrderHasCompanion(false);
       setPickupLatInput("");
       setPickupLonInput("");
       setDropoffLatInput("");
       setDropoffLonInput("");
       setSelectedPassengerId("");
       setOrderNote("");
+      setIsRoundTrip(false);
+      setReturnDate("");
+      setReturnTime("");
       const now = new Date();
       const tomorrow = new Date(now);
       tomorrow.setDate(tomorrow.getDate() + 1);
@@ -751,6 +813,13 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     if (editModal && selectedOrderData) {
       setEditingStatus(selectedOrderData.status);
       setEditingNote(selectedOrderData.note || "");
+      const dt = selectedOrderData.desired_pickup_time
+        ? new Date(selectedOrderData.desired_pickup_time)
+        : new Date();
+      setEditingOrderDate(dt.toISOString().split("T")[0]);
+      setEditingOrderTime(
+        `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`
+      );
     }
   }, [editModal, selectedOrderData]);
 
@@ -770,11 +839,24 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
         });
       }
 
-      // Если примечание изменилось, обновляем через updateOrder
+      // Собираем изменения для updateOrder
+      const updates: Record<string, any> = {};
       if (editingNote !== (selectedOrderData.note || "")) {
-        await ordersApi.updateOrder(editModal, {
-          note: editingNote
-        });
+        updates.note = editingNote;
+      }
+      const originalDt = selectedOrderData.desired_pickup_time
+        ? new Date(selectedOrderData.desired_pickup_time)
+        : new Date();
+      const originalDate = originalDt.toISOString().split("T")[0];
+      const originalTime = `${String(originalDt.getHours()).padStart(2, "0")}:${String(originalDt.getMinutes()).padStart(2, "0")}`;
+      if (editingOrderDate !== originalDate || editingOrderTime !== originalTime) {
+        const [hours, minutes] = editingOrderTime.split(":");
+        const newPickupTime = new Date(editingOrderDate);
+        newPickupTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+        updates.desired_pickup_time = newPickupTime.toISOString();
+      }
+      if (Object.keys(updates).length > 0) {
+        await ordersApi.updateOrder(editModal, updates);
       }
 
       // Обновляем список заказов
@@ -1026,10 +1108,6 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           aValue = statusMap[a.status] || a.status;
           bValue = statusMap[b.status] || b.status;
           break;
-        case 'price':
-          aValue = a.final_price || a.estimated_price || 0;
-          bValue = b.final_price || b.estimated_price || 0;
-          break;
         case 'passenger':
           aValue = a.passenger.full_name;
           bValue = b.passenger.full_name;
@@ -1240,15 +1318,6 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                       {getSortIcon('created_at')}
                     </div>
                 </th>
-                  <th 
-                    className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600"
-                    onClick={() => handleSort('price')}
-                  >
-                    <div className="flex items-center gap-2">
-                  Цена
-                      {getSortIcon('price')}
-                    </div>
-                </th>
                 <th className="px-6 py-3 text-left text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">
                   Действия
                 </th>
@@ -1257,7 +1326,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                 {sortedOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+                    <td colSpan={7} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                       Заказы не найдены
                     </td>
                   </tr>
@@ -1304,9 +1373,6 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                             <p>{displayOrder.date}</p>
                             <p>{displayOrder.time}</p>
                     </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap dark:text-white">
-                          {displayOrder.price}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex gap-2">
@@ -1754,6 +1820,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           setEditModal(null);
           setEditingStatus("");
           setEditingNote("");
+          setEditingOrderDate("");
+          setEditingOrderTime("");
         }}
         title="Редактировать заказ"
         size="md"
@@ -1829,6 +1897,27 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               )}
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Дата и время</label>
+                <input
+                  type="date"
+                  value={editingOrderDate}
+                  onChange={(e) => setEditingOrderDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">&nbsp;</label>
+                <input
+                  type="time"
+                  value={editingOrderTime}
+                  onChange={(e) => setEditingOrderTime(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Примечания</label>
               <textarea
@@ -1873,6 +1962,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                   setEditModal(null);
                   setEditingStatus("");
                   setEditingNote("");
+                  setEditingOrderDate("");
+                  setEditingOrderTime("");
                 }}
                 disabled={saving}
                 className="flex-1 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 py-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 flex items-center justify-center gap-2 disabled:opacity-50"
@@ -2074,6 +2165,10 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           setDropoffLonInput("");
           setSelectedPassengerId("");
           setOrderNote("");
+          setOrderHasCompanion(false);
+          setIsRoundTrip(false);
+          setReturnDate("");
+          setReturnTime("");
           // Сброс формы пассажира
           setPassengerPhone("");
           setPassengerName("");
@@ -2104,6 +2199,10 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 setDropoffCoords(null);
                 setSelectedPassengerId("");
                 setOrderNote("");
+                setOrderHasCompanion(false);
+                setIsRoundTrip(false);
+                setReturnDate("");
+                setReturnTime("");
                 setGeocodeErrorPickup(null);
                 setGeocodeErrorDropoff(null);
                 // Сброс формы пассажира
@@ -2127,7 +2226,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             </button>
             <button 
               onClick={handleCreateOrder}
-              disabled={creatingOrder}
+              disabled={!isCreateOrderFormValid() || creatingOrder}
               className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {creatingOrder ? (
@@ -2153,12 +2252,12 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             {/* Поле ввода телефона */}
             <div className="mb-3">
               <div className="relative">
-                <input
-                  type="text"
-                  value={passengerPhone}
-                  onChange={(e) => setPassengerPhone(e.target.value)}
+                <PhoneInput
+                  international
+                  value={passengerPhone || undefined}
+                  onChange={(val) => setPassengerPhone(val || "")}
                   placeholder="Введите телефон пассажира"
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white [&_.PhoneInputInput]:bg-transparent [&_.PhoneInputInput]:border-none [&_.PhoneInputInput]:outline-none [&_.PhoneInputInput]:flex-1"
                 />
                 {searchingPassenger && (
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
@@ -2273,7 +2372,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             )}
 
             {/* Форма создания нового пассажира */}
-            {(selectedPassengerMode === 'new' || (matchingPassengers.length === 0 && passengerPhone.length >= 3)) && (
+            {(selectedPassengerMode === 'new' || (matchingPassengers.length === 0 && passengerPhone.length >= 4)) && (
               <div className="space-y-3 p-4 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50">
                 <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {selectedPassengerMode === 'new' ? 'Добавление нового пассажира' : 'Пассажир не найден. Заполните данные для создания:'}
@@ -2549,6 +2648,58 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isRoundTrip}
+                onChange={(e) => {
+                  setIsRoundTrip(e.target.checked);
+                  if (e.target.checked && !returnDate) {
+                    setReturnDate(orderDate);
+                    setReturnTime(orderTime);
+                  }
+                }}
+                className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+              />
+              <span className="text-sm text-gray-700 dark:text-gray-300">Туда-обратно</span>
+            </label>
+            {isRoundTrip && (
+              <div className="grid grid-cols-2 gap-4 mt-3 ml-6">
+                <div>
+                  <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Дата обратной поездки *</label>
+                  <input
+                    type="date"
+                    value={returnDate}
+                    onChange={(e) => setReturnDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm mb-2 text-gray-700 dark:text-gray-300">Время обратной поездки *</label>
+                  <input
+                    type="time"
+                    value={returnTime}
+                    onChange={(e) => setReturnTime(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={orderHasCompanion}
+                onChange={(e) => setOrderHasCompanion(e.target.checked)}
+                className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+              />
+              <span className="text-sm text-gray-700 dark:text-gray-300">С сопровождением</span>
+            </label>
           </div>
 
           <div>

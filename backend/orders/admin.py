@@ -211,7 +211,7 @@ class DispatchConfigAdmin(admin.ModelAdmin):
             'description': 'Сумма весов должна быть примерно равна 1.0'
         }),
         ('Пороги и лимиты', {
-            'fields': ('min_rating', 'max_offers_per_hour')
+            'fields': ('min_rating', 'max_offers_per_hour', 'fairness_scale')
         }),
         ('Расширение поиска', {
             'fields': ('expand_search_after_seconds', 'expand_eta_multiplier')

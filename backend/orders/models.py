@@ -84,9 +84,9 @@ class PricingConfig(models.Model):
     
     # Ожидание
     wait_free_min = models.IntegerField(
-        default=3,
+        default=20,
         verbose_name='Бесплатное ожидание (минуты)',
-        help_text='Минуты бесплатного ожидания после прибытия'
+        help_text='Минуты бесплатного ожидания после прибытия (сверх — платно)'
     )
     wait_per_min = models.DecimalField(
         max_digits=10,
@@ -537,6 +537,13 @@ class DispatchConfig(models.Model):
         default=720,  # 12 минут
         verbose_name='Максимальный ETA до подачи (секунды)'
     )
+    max_deadhead_km = models.FloatField(
+        default=20.0,
+        null=True,
+        blank=True,
+        verbose_name='Максимальный холостой пробег (км)',
+        help_text='Не назначать заказы, если водитель дальше (0 = без ограничения)'
+    )
     k_candidates = models.IntegerField(
         default=50,
         verbose_name='Количество кандидатов для скоринга (Top-K)'
@@ -568,7 +575,7 @@ class DispatchConfig(models.Model):
         help_text='Штраф за вероятность отмены'
     )
     w_fairness = models.FloatField(
-        default=0.05,
+        default=0.15,
         verbose_name='Вес справедливости',
         help_text='Баланс распределения заказов'
     )
@@ -593,6 +600,11 @@ class DispatchConfig(models.Model):
         default=20,
         verbose_name='Максимум офферов в час',
         help_text='Лимит предложений водителю за час'
+    )
+    fairness_scale = models.FloatField(
+        default=2.0,
+        verbose_name='Масштаб fairness',
+        help_text='Разница в заказах для полного штрафа (2 = чувствительнее)'
     )
     
     # Правила расширения поиска

@@ -3,6 +3,10 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from django.http import HttpResponse
+import csv
+import io
+import zipfile
 import logging
 from orders.models import Order, OrderStatus, OrderOffer
 from orders.services import OrderService
@@ -887,3 +891,106 @@ class DispatchViewSet(viewsets.ViewSet):
         auto_assign = request.method == 'POST'
         result = distribute_orders_for_day(target_date, auto_assign=auto_assign, user=user)
         return Response(result)
+
+    @action(detail=False, methods=['get'], url_path='daily-routes-export')
+    def daily_routes_export(self, request):
+        """
+        Экспорт маршрутов дня: ZIP с отдельным CSV файлом для каждого водителя.
+        Query param: date=YYYY-MM-DD (по умолчанию — сегодня)
+        """
+        user = request.user
+        if not user.is_staff:
+            return Response({'error': 'Нет прав'}, status=status.HTTP_403_FORBIDDEN)
+
+        from datetime import date as date_cls, datetime as dt_cls
+        from .daily_routing import distribute_orders_for_day
+
+        date_str = request.query_params.get('date')
+        if date_str:
+            try:
+                target_date = dt_cls.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Неверный формат даты. Используйте YYYY-MM-DD'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            target_date = date_cls.today()
+
+        result = distribute_orders_for_day(target_date, auto_assign=False, user=user)
+        routes = result.get('routes', [])
+
+        if not routes:
+            return Response(
+                {'error': 'Нет маршрутов для экспорта на указанную дату'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        def _format_time(iso_str):
+            if not iso_str:
+                return ''
+            s = str(iso_str)
+            if 'T' in s:
+                part = s.split('T')[1][:5]
+                return part if len(part) == 5 else s
+            if len(s) >= 5 and ':' in s:
+                return s[:5]
+            return s
+
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for route in routes:
+                driver_info = route.get('driver', {})
+                driver_id = driver_info.get('id', 0)
+                driver_name = (driver_info.get('name', 'driver') or 'driver').replace(' ', '_').replace('/', '_')
+                orders = route.get('orders', [])
+
+                csv_buffer = io.StringIO()
+                writer = csv.writer(csv_buffer, delimiter=';', lineterminator='\r\n')
+
+                writer.writerow([f'Маршрутный лист на {target_date.strftime("%d.%m.%Y")}'])
+                writer.writerow([])
+                writer.writerow(['Водитель:', driver_info.get('name', '')])
+                writer.writerow(['Телефон:', driver_info.get('phone', '')])
+                writer.writerow(['Авто:', driver_info.get('car_model', '') or '', 'Гос. номер:', driver_info.get('plate_number', '') or ''])
+                writer.writerow(['Регион:', driver_info.get('region', '')])
+                writer.writerow([])
+                writer.writerow([
+                    '№', 'ID', 'Пассажир', 'Откуда', 'Куда', 'Время',
+                    'Сопр.', 'Мест', 'Км', 'Цена', 'Примечание'
+                ])
+
+                for idx, o in enumerate(orders, 1):
+                    price = o.get('estimated_price', '')
+                    if price:
+                        try:
+                            price = f'{float(price):.0f}'
+                        except (ValueError, TypeError):
+                            pass
+                    writer.writerow([
+                        idx,
+                        o.get('id', ''),
+                        o.get('passenger_name', ''),
+                        (o.get('pickup_title', '') or '')[:80],
+                        (o.get('dropoff_title', '') or '')[:80],
+                        _format_time(o.get('desired_pickup_time')),
+                        'Да' if o.get('has_companion') else 'Нет',
+                        o.get('seats_needed', ''),
+                        o.get('distance_km', '') if o.get('distance_km') is not None else '',
+                        price,
+                        (o.get('note') or '').replace('\n', ' ').strip()[:200],
+                    ])
+
+                writer.writerow([])
+                writer.writerow(['Итого заказов:', route.get('total_orders', 0)])
+                writer.writerow(['Общее расстояние, км:', route.get('total_distance_km', 0)])
+
+                filename = f'marshrut_{target_date}_{driver_id}_{driver_name}.csv'
+                zip_file.writestr(filename, csv_buffer.getvalue().encode('utf-8-sig'))  # BOM для Excel
+
+        zip_buffer.seek(0)
+        response = HttpResponse(zip_buffer.read(), content_type='application/zip')
+        response['Content-Disposition'] = (
+            f'attachment; filename="daily_routes_{target_date}.zip"'
+        )
+        return response

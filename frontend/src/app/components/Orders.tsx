@@ -115,22 +115,51 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   const [importOptions, setImportOptions] = useState({ dryRun: false, skipErrors: false });
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
 
-  // Load orders from API
+  // Пагинация
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(20);
+  const [totalCount, setTotalCount] = useState(0);
+
+  // Маппинг статусов UI -> API
+  const statusToApi = (s: string): string | undefined => {
+    if (s === "Все") return undefined;
+    if (s === "Ожидание") return "active_queue,assigned,submitted,awaiting_dispatcher_decision";
+    if (s === "В пути") return "driver_en_route,arrived_waiting,ride_ongoing";
+    if (s === "Выполнено") return "completed";
+    if (s === "Отменён") return "cancelled";
+    return undefined;
+  };
+
+  // Load orders from API with pagination
+  const loadOrders = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const params: { page?: number; page_size?: number; status?: string; search?: string } = {
+        page,
+        page_size: pageSize,
+      };
+      const statusParam = statusToApi(selectedStatus);
+      if (statusParam) params.status = statusParam;
+      if (searchTerm.trim()) params.search = searchTerm.trim();
+      const response = await ordersApi.getOrdersPaginated(params);
+      setOrders(response.results);
+      setTotalCount(response.count);
+    } catch (err: any) {
+      setError(err.message || "Ошибка загрузки заказов");
+    } finally {
+      setLoading(false);
+    }
+  }, [page, pageSize, selectedStatus, searchTerm]);
+
   useEffect(() => {
-    const loadOrders = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await ordersApi.getOrders();
-        setOrders(data);
-      } catch (err: any) {
-        setError(err.message || "Ошибка загрузки заказов");
-      } finally {
-        setLoading(false);
-      }
-    };
     loadOrders();
-  }, []);
+  }, [loadOrders]);
+
+  // Сброс на страницу 1 при смене фильтров
+  useEffect(() => {
+    setPage(1);
+  }, [selectedStatus, searchTerm]);
 
   // Load passengers from API
   useEffect(() => {
@@ -500,8 +529,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       toast.success("Заказ успешно создан!");
       
       // Обновляем список заказов
-      const updatedOrders = await ordersApi.getOrders();
-      setOrders(updatedOrders);
+      loadOrders();
       
       // Закрываем модальное окно и сбрасываем форму
       setCreateModal(false);
@@ -557,13 +585,8 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
   };
 
   // Refresh orders after status update
-  const refreshOrders = async () => {
-    try {
-      const data = await ordersApi.getOrders();
-      setOrders(data);
-    } catch (err: any) {
-      setError(err.message || "Ошибка обновления заказов");
-    }
+  const refreshOrders = () => {
+    loadOrders();
   };
 
   // Load candidates when assign modal opens
@@ -982,23 +1005,9 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     }
   };
 
-  const filteredAndSortedOrders = useMemo(() => {
-    // Фильтрация
-    let filtered = orders.filter((order) => {
-      const displayStatus = statusMap[order.status] || order.status;
-    const matchesSearch =
-      order.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.passenger.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (order.driver?.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.pickup_title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        order.dropoff_title.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus =
-        selectedStatus === "Все" || displayStatus === selectedStatus;
-    return matchesSearch && matchesStatus;
-  });
-
-    // Сортировка
-    filtered = [...filtered].sort((a, b) => {
+  // Сортировка (фильтрация на сервере)
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort((a, b) => {
       let aValue: any;
       let bValue: any;
 
@@ -1031,9 +1040,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
       return 0;
     });
-
-    return filtered;
-  }, [orders, searchTerm, selectedStatus, sortField, sortDirection]);
+  }, [orders, sortField, sortDirection]);
 
   // Sort function
   const handleSort = (field: SortField) => {
@@ -1180,6 +1187,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <span className="ml-3 text-gray-600 dark:text-gray-400">Загрузка заказов...</span>
           </div>
         ) : (
+        <>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600">
@@ -1241,14 +1249,14 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {filteredAndSortedOrders.length === 0 ? (
+                {sortedOrders.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
                       Заказы не найдены
                     </td>
                   </tr>
                 ) : (
-                  filteredAndSortedOrders.map((order) => {
+                  sortedOrders.map((order) => {
                     const displayOrder = formatOrderForDisplay(order);
                     return (
                 <tr 
@@ -1354,6 +1362,35 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             </tbody>
           </table>
         </div>
+
+        {/* Пагинация */}
+        {totalCount > 0 && (
+          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Показано <span className="font-medium text-gray-900 dark:text-white">{sortedOrders.length}</span> из <span className="font-medium text-gray-900 dark:text-white">{totalCount}</span> заказов
+            </p>
+            <div className="flex gap-2">
+              <button
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={page === 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Предыдущая
+              </button>
+              <span className="px-4 py-2 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-lg font-medium">
+                {page}
+              </span>
+              <button
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={page * pageSize >= totalCount}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Следующая
+              </button>
+            </div>
+          </div>
+        )}
+        </>
         )}
       </div>
 
@@ -2010,27 +2047,6 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
           </div>
         )}
       </Modal>
-
-      {/* Pagination */}
-      <div className="flex items-center justify-between bg-white dark:bg-gray-800 rounded-lg p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-        <p className="text-sm text-gray-600 dark:text-gray-400">
-          Показано {filteredAndSortedOrders.length} из {orders.length} заказов
-        </p>
-        <div className="flex gap-2">
-          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
-            Назад
-          </button>
-          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700">
-            1
-          </button>
-          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
-            2
-          </button>
-          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm hover:bg-gray-50 dark:hover:bg-gray-700 dark:text-white">
-            Далее
-          </button>
-        </div>
-      </div>
 
       {/* Create Order Modal */}
       <Modal

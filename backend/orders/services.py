@@ -472,8 +472,10 @@ class PriceCalculator:
         # Базовая цена за расстояние
         base_distance_price = Decimal(str(distance_km)) * pricing_config.price_per_km
         
-        # Цена за ожидание
-        waiting_time_price = Decimal(str(waiting_minutes)) * pricing_config.price_per_minute_waiting
+        # Цена за ожидание: первые wait_free_min бесплатно, сверх — по wait_per_min
+        wait_free = Decimal(str(pricing_config.wait_free_min or 20))
+        paid_wait_min = max(Decimal('0'), Decimal(str(waiting_minutes)) - wait_free)
+        waiting_time_price = paid_wait_min * (pricing_config.wait_per_min or pricing_config.price_per_minute_waiting)
         
         # Доплата за сопровождение
         companion_fee = pricing_config.companion_fee if order.has_companion else Decimal('0')

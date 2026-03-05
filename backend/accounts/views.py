@@ -20,6 +20,7 @@ from .serializers import (
 )
 from django.contrib.auth import authenticate
 from .services import OTPService, UserService
+from .pagination import DriverPagination
 
 User = get_user_model()
 
@@ -497,6 +498,7 @@ class DriverViewSet(viewsets.ModelViewSet):
     queryset = Driver.objects.select_related('user', 'region').all()
     serializer_class = DriverSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = DriverPagination
 
     def get_serializer_class(self):
         """Выбор сериализатора в зависимости от действия"""

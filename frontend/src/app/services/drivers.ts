@@ -37,6 +37,7 @@ export interface DriversListParams {
   region_id?: string;
   search?: string;
   page?: number;
+  page_size?: number;
 }
 
 export interface CreateDriverRequest {
@@ -74,7 +75,8 @@ export const driversApi = {
    * Получить список водителей
    */
   async getDrivers(params?: DriversListParams): Promise<Driver[]> {
-    const response = await api.get<Driver[] | PaginatedResponse<Driver>>('/drivers/', { params });
+    const requestParams = { page_size: 100, ...params };
+    const response = await api.get<Driver[] | PaginatedResponse<Driver>>('/drivers/', { params: requestParams });
     
     if (Array.isArray(response.data)) {
       return response.data;

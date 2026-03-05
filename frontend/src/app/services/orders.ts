@@ -97,6 +97,8 @@ export interface OrdersListParams {
   passenger_id?: number;
   driver_id?: number;
   page?: number;
+  page_size?: number;
+  search?: string;
 }
 
 export interface PaginatedResponse<T> {
@@ -136,17 +138,30 @@ export interface GeocodeResult {
 
 export const ordersApi = {
   /**
-   * Получить список заказов
+   * Получить список заказов (с пагинацией)
    */
   async getOrders(params?: OrdersListParams): Promise<Order[]> {
     const response = await api.get<Order[] | PaginatedResponse<Order>>('/orders/', { params });
-    
-    // Обрабатываем как обычный массив или пагинированный ответ
     if (Array.isArray(response.data)) {
       return response.data;
-    } else {
-      return response.data.results;
     }
+    return response.data.results;
+  },
+
+  /**
+   * Получить список заказов с пагинацией (count, next, previous, results)
+   */
+  async getOrdersPaginated(params?: OrdersListParams): Promise<PaginatedResponse<Order>> {
+    const response = await api.get<Order[] | PaginatedResponse<Order>>('/orders/', { params });
+    if (Array.isArray(response.data)) {
+      return {
+        count: response.data.length,
+        next: null,
+        previous: null,
+        results: response.data,
+      };
+    }
+    return response.data as PaginatedResponse<Order>;
   },
 
   /**

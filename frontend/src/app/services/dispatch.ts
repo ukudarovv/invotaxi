@@ -318,5 +318,17 @@ export const dispatchApi = {
     });
     return response.data;
   },
+
+  /**
+   * Экспорт маршрутов дня: ZIP с отдельным CSV для каждого водителя
+   */
+  async exportDailyRoutes(date?: string): Promise<Blob> {
+    const params = date ? { date } : {};
+    const response = await api.get('/dispatch/daily-routes-export/', {
+      params,
+      responseType: 'blob',
+    });
+    return response.data;
+  },
 };
 

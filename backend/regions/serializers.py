@@ -1,16 +1,30 @@
 import uuid
 from rest_framework import serializers
-from .models import Region, City
+from .models import Region, City, District
+
+
+class DistrictSerializer(serializers.ModelSerializer):
+    """Сериализатор для района"""
+    center = serializers.SerializerMethodField()
+
+    class Meta:
+        model = District
+        fields = ['id', 'title', 'center_lat', 'center_lon', 'center']
+
+    def get_center(self, obj):
+        return {'lat': obj.center_lat, 'lon': obj.center_lon}
 
 
 class CitySerializer(serializers.ModelSerializer):
     """Сериализатор для города"""
     center = serializers.SerializerMethodField()
+    district = DistrictSerializer(read_only=True)
+    district_id = serializers.CharField(write_only=True, required=False, allow_null=True)
     id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = City
-        fields = ['id', 'title', 'center_lat', 'center_lon', 'center']
+        fields = ['id', 'title', 'district', 'district_id', 'center_lat', 'center_lon', 'center']
 
     def get_center(self, obj):
         return {
@@ -39,20 +53,33 @@ class CitySerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         """Создание города с автоматической генерацией ID, если он не указан"""
-        # Получаем id из validated_data, если он указан
         city_id = validated_data.pop('id', None)
-        
-        # Если ID не указан, пустой или None, генерируем новый
+        district_id = validated_data.pop('district_id', None)
+
         if not city_id or (isinstance(city_id, str) and city_id.strip() == ''):
             city_id = f'city_{uuid.uuid4().hex[:12]}'
-        
-        # Проверяем, не существует ли уже город с таким ID
-        # Если существует, генерируем новый уникальный ID
         while City.objects.filter(id=city_id).exists():
             city_id = f'city_{uuid.uuid4().hex[:12]}'
-        
+
         validated_data['id'] = city_id
+        if district_id:
+            try:
+                validated_data['district'] = District.objects.get(id=district_id)
+            except District.DoesNotExist:
+                pass
         return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        district_id = validated_data.pop('district_id', None)
+        if district_id is not None:
+            if district_id:
+                try:
+                    instance.district = District.objects.get(id=district_id)
+                except District.DoesNotExist:
+                    instance.district = None
+            else:
+                instance.district = None
+        return super().update(instance, validated_data)
 
 
 class RegionSerializer(serializers.ModelSerializer):

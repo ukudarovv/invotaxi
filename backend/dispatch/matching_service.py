@@ -176,9 +176,15 @@ class MatchingService:
                     continue
                 
                 eta_seconds = eta_data['duration_seconds']
+                distance_km = eta_data.get('distance_km', 0) or 0
                 
                 # Фильтр по максимальному ETA
                 if eta_seconds > self.config.eta_max_seconds:
+                    continue
+                
+                # Фильтр «не слишком далеко» по холостому пробегу
+                max_dh = getattr(self.config, 'max_deadhead_km', None)
+                if max_dh and max_dh > 0 and distance_km > max_dh:
                     continue
                 
                 candidates_with_eta.append((driver, eta_seconds))
@@ -212,8 +218,8 @@ class MatchingService:
             # Нормализация метрик (0..1)
             eta_norm = min(eta_seconds / self.config.eta_max_seconds, 1.0)
             
-            # Нормализация расстояния (предполагаем максимум 20 км)
-            max_distance_km = 20.0
+            # Нормализация расстояния
+            max_distance_km = getattr(self.config, 'max_deadhead_km', None) or 20.0
             deadhead_norm = min(distance_km / max_distance_km, 1.0)
             
             # Риск отказа (1 - acceptance_rate)
@@ -222,12 +228,12 @@ class MatchingService:
             # Риск отмены
             cancel_norm = stats.cancel_rate
             
-            # Fairness penalty
-            # Считаем медиану заказов за последний час среди всех водителей
+            # Fairness penalty: штраф только за перегруженность (предпочитаем менее загруженных)
             median_orders = self._get_median_orders_last_hour()
-            if median_orders > 0:
+            scale = getattr(self.config, 'fairness_scale', 2.0) or 2.0
+            if median_orders >= 0 and scale > 0:
                 fairness_diff = stats.orders_last_60min - median_orders
-                fairness_norm = min(abs(fairness_diff) / 5.0, 1.0)  # Масштаб 5 заказов
+                fairness_norm = min(max(0.0, fairness_diff) / scale, 1.0)
             else:
                 fairness_norm = 0.0
             

@@ -1,12 +1,40 @@
 from django.db import models
 
 
+class District(models.Model):
+    """Административный район области"""
+    id = models.CharField(max_length=50, primary_key=True, verbose_name='ID района')
+    title = models.CharField(max_length=150, verbose_name='Название района')
+    center_lat = models.FloatField(verbose_name='Широта центра')
+    center_lon = models.FloatField(verbose_name='Долгота центра')
+
+    class Meta:
+        verbose_name = 'Район'
+        verbose_name_plural = 'Районы'
+        ordering = ['title']
+
+    def __str__(self):
+        return self.title
+
+    @property
+    def center(self):
+        return (self.center_lat, self.center_lon)
+
+
 class City(models.Model):
-    """Модель города"""
+    """Модель города / населённого пункта"""
     id = models.CharField(max_length=50, primary_key=True, verbose_name='ID города')
     title = models.CharField(max_length=100, verbose_name='Название города')
     center_lat = models.FloatField(verbose_name='Широта центра')
     center_lon = models.FloatField(verbose_name='Долгота центра')
+    district = models.ForeignKey(
+        District,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='cities',
+        verbose_name='Район'
+    )
 
     class Meta:
         verbose_name = 'Город'

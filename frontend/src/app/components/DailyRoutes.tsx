@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Calendar, MapPin, Clock, Car, User, Loader2, RefreshCw, CheckCircle, AlertCircle, Route, Users, Navigation, Brain, BarChart3,
+  Calendar, MapPin, Clock, Car, User, Loader2, RefreshCw, CheckCircle, AlertCircle, Route, Users, Navigation, Brain, BarChart3, Download,
 } from "lucide-react";
 import { dispatchApi, DailyRoutesResponse, DailyRoute, MLScoreDetails } from "../services/dispatch";
 import { toast } from "sonner";
@@ -67,6 +67,7 @@ export function DailyRoutes() {
     return today.toISOString().split("T")[0];
   });
   const [expandedDriver, setExpandedDriver] = useState<number | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<ymaps.Map | null>(null);
   const [ymapsReady, setYmapsReady] = useState(false);
@@ -98,6 +99,24 @@ export function DailyRoutes() {
       toast.error(err.response?.data?.error || "Ошибка применения маршрутов");
     } finally {
       setApplying(false);
+    }
+  };
+
+  const exportRoutes = async () => {
+    setIsExporting(true);
+    try {
+      const blob = await dispatchApi.exportDailyRoutes(selectedDate);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `daily_routes_${selectedDate}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Маршруты экспортированы");
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || "Ошибка экспорта маршрутов");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -266,6 +285,13 @@ export function DailyRoutes() {
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Рассчитать
           </button>
+          {data && data.routes?.length > 0 && (
+            <button onClick={exportRoutes} disabled={isExporting}
+              className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2">
+              {isExporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              Экспорт ZIP
+            </button>
+          )}
           {data && data.distributed_count > 0 && !data.auto_assigned && (
             <button onClick={applyRoutes} disabled={applying}
               className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
@@ -336,7 +362,7 @@ export function DailyRoutes() {
       )}
 
       {/* Map */}
-      {data && data.routes.length > 0 && (
+      {data && data.routes?.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
           <div className="p-4 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-lg font-medium dark:text-white flex items-center gap-2">
@@ -351,7 +377,7 @@ export function DailyRoutes() {
       )}
 
       {/* Driver routes */}
-      {data && data.routes.length > 0 && (
+      {data && data.routes?.length > 0 && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold dark:text-white">Маршруты водителей</h2>
           {data.routes.map((route) => (

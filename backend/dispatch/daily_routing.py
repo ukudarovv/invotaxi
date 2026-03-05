@@ -29,7 +29,8 @@ import math
 
 logger = logging.getLogger(__name__)
 
-ESTIMATED_ORDER_DURATION_MINUTES = 30
+DROPOFF_BUFFER_MINUTES = 7.0  # Время высадки пассажира 5-10 мин
+MIN_PER_KM_RIDE = 2.0  # ~30 км/ч в городе
 MAX_DEADHEAD_KM = 20.0
 MAX_GAP_MINUTES = 120.0
 
@@ -67,9 +68,12 @@ class DailyRoute:
         return None
 
     def last_end_time(self):
+        """Время завершения последнего заказа: поездка + высадка (5-10 мин)"""
         if self.orders:
             last = self.orders[-1]
-            return last.desired_pickup_time + timedelta(minutes=ESTIMATED_ORDER_DURATION_MINUTES)
+            ride_min = (last.distance_km or 5) * MIN_PER_KM_RIDE
+            total_min = ride_min + DROPOFF_BUFFER_MINUTES
+            return last.desired_pickup_time + timedelta(minutes=total_min)
         return None
 
     def can_take_order(self, order: Order) -> bool:
@@ -159,10 +163,11 @@ def _compute_ml_score(
     # ── 4. cancel_norm ────────────────────────────────────────
     cancel_norm = stats.cancel_rate if stats else 0.0
 
-    # ── 5. fairness_norm ──────────────────────────────────────
-    if median_orders > 0:
+    # ── 5. fairness_norm: штраф только за перегруженность (предпочитаем менее загруженных) ──
+    scale = getattr(config, 'fairness_scale', 2.0) or 2.0
+    if median_orders >= 0 and scale > 0:
         diff = route.total_orders - median_orders
-        fairness_norm = min(abs(diff) / 5.0, 1.0)
+        fairness_norm = min(max(0.0, diff) / scale, 1.0)
     else:
         fairness_norm = 0.0
 
@@ -303,8 +308,12 @@ def distribute_orders_for_day(target_date: date, auto_assign: bool = False, user
         eligible: List[DriverScore] = []
         median_orders = _get_median([r.total_orders for r in routes.values()])
 
+        max_deadhead = getattr(config, 'max_deadhead_km', None) or MAX_DEADHEAD_KM
         for drv_id, route in routes.items():
             if not route.can_take_order(order):
+                continue
+            deadhead_km = route.deadhead_km_to(order)
+            if max_deadhead > 0 and deadhead_km > max_deadhead:
                 continue
             score = _compute_ml_score(route, order, config, median_orders)
             eligible.append(score)

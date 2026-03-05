@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.http import HttpResponse
 from .models import Order, OrderStatus, PricingConfig, SurgeZone, PriceBreakdown, CancelPolicy
 from .serializers import OrderSerializer, OrderStatusUpdateSerializer
+from .pagination import OrderPagination
 from .services import OrderService, PriceCalculator
 from .advanced_pricing import AdvancedPriceCalculator
 from accounts.models import Passenger, Driver
@@ -29,6 +30,7 @@ class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.select_related('passenger', 'driver', 'passenger__user', 'driver__user').all()
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
+    pagination_class = OrderPagination
 
     def get_queryset(self):
         user = self.request.user
@@ -63,6 +65,22 @@ class OrderViewSet(viewsets.ModelViewSet):
         driver_id = self.request.query_params.get('driver_id')
         if driver_id:
             queryset = queryset.filter(driver_id=driver_id)
+
+        search = self.request.query_params.get('search')
+        if search and search.strip():
+            from django.db.models import Q
+            q = search.strip()
+            queryset = queryset.filter(
+                Q(id__icontains=q) |
+                Q(pickup_title__icontains=q) |
+                Q(dropoff_title__icontains=q) |
+                Q(pickup_object_name__icontains=q) |
+                Q(dropoff_object_name__icontains=q) |
+                Q(passenger__full_name__icontains=q) |
+                Q(passenger__user__phone__icontains=q) |
+                Q(driver__name__icontains=q) |
+                Q(driver__user__phone__icontains=q)
+            )
 
         return queryset.order_by('-created_at')
 

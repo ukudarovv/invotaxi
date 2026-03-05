@@ -176,6 +176,7 @@ class Command(BaseCommand):
             'Таскала Курилкино',
             'Балыкши',
             'Дамба',
+            'Ракуш',
             'Мкр Бирлик',
             'Талгайран-2',
             'Жулдыз',
@@ -184,9 +185,20 @@ class Command(BaseCommand):
         ]
         
         # Получаем или создаем город Атырау
+        district_atyrau = None
+        try:
+            from regions.models import District
+            district_atyrau = District.objects.filter(id='atyrau_city').first()
+        except Exception:
+            pass
+
         try:
             city = City.objects.get(id='atyrau')
             self.stdout.write(self.style.SUCCESS(f'Найден город: {city.title}'))
+            if district_atyrau and city.district_id != 'atyrau_city':
+                city.district = district_atyrau
+                city.save()
+                self.stdout.write(f'  Привязан к району: {district_atyrau.title}')
         except City.DoesNotExist:
             if dry_run:
                 self.stdout.write(self.style.WARNING('Город Атырау будет создан'))
@@ -196,7 +208,8 @@ class Command(BaseCommand):
                     id='atyrau',
                     title='Атырау',
                     center_lat=DEFAULT_LAT,
-                    center_lon=DEFAULT_LON
+                    center_lon=DEFAULT_LON,
+                    district=district_atyrau
                 )
                 self.stdout.write(self.style.SUCCESS(f'Создан город: {city.title}'))
         

@@ -3,13 +3,20 @@ from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from accounts.permissions import IsAdminOrReadOnly
-from .models import Region, City
-from .serializers import RegionSerializer, CitySerializer
+from .models import Region, City, District
+from .serializers import RegionSerializer, CitySerializer, DistrictSerializer
+
+
+class DistrictViewSet(viewsets.ModelViewSet):
+    """ViewSet для районов области"""
+    queryset = District.objects.all()
+    serializer_class = DistrictSerializer
+    permission_classes = [IsAdminOrReadOnly]
 
 
 class CityViewSet(viewsets.ModelViewSet):
     """ViewSet для городов с CRUD операциями"""
-    queryset = City.objects.all()
+    queryset = City.objects.select_related('district').all()
     serializer_class = CitySerializer
     permission_classes = [IsAdminOrReadOnly]  # Чтение всем, изменение только админам
     

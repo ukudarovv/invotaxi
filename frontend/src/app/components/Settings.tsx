@@ -1,7 +1,11 @@
-import { Bell, Shield, Users, Settings as SettingsIcon, Save, Plus, Search, Edit, Trash2, Lock, Unlock, MoreVertical, Loader2 } from "lucide-react";
+import { Bell, Shield, Users, Settings as SettingsIcon, Save, Plus, Search, Edit, Trash2, Lock, Unlock, MoreVertical, Loader2, Database, AlertTriangle } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { Modal } from "./Modal";
 import { usersApi, AdminUser, PaginatedResponse } from "../services/users";
+import { ordersApi } from "../services/orders";
+import { driversApi } from "../services/drivers";
+import { passengersApi } from "../services/passengers";
+import { toast } from "sonner";
 
 export function Settings() {
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -18,6 +22,8 @@ export function Settings() {
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [clearModal, setClearModal] = useState<"orders" | "drivers" | "passengers" | "all" | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [formData, setFormData] = useState({
     first_name: "",
     last_name: "",
@@ -359,6 +365,112 @@ export function Settings() {
           </div>
         </div>
       </div>
+
+      {/* Data cleanup */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900 flex items-center justify-center text-red-600 dark:text-red-400">
+            <Database className="w-5 h-5" />
+          </div>
+          <h2 className="text-xl text-gray-900 dark:text-white">Очистка данных</h2>
+        </div>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Удаление всех записей из таблиц. Действие необратимо. Используйте перед импортом новых данных.
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={() => setClearModal("orders")}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Очистить заказы
+          </button>
+          <button
+            onClick={() => setClearModal("drivers")}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Очистить водителей
+          </button>
+          <button
+            onClick={() => setClearModal("passengers")}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Очистить пассажиров
+          </button>
+          <button
+            onClick={() => setClearModal("all")}
+            className="px-4 py-2 bg-red-700 text-white rounded-lg hover:bg-red-800 flex items-center gap-2 border-2 border-red-500"
+          >
+            <AlertTriangle className="w-4 h-4" />
+            Очистить всё
+          </button>
+        </div>
+      </div>
+
+      {/* Clear Data Modal */}
+      <Modal
+        isOpen={clearModal !== null}
+        onClose={() => !clearing && setClearModal(null)}
+        title={
+          clearModal === "orders" ? "Очистить заказы" :
+          clearModal === "drivers" ? "Очистить водителей" :
+          clearModal === "passengers" ? "Очистить пассажиров" :
+          "Очистить все данные"
+        }
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-red-600 dark:text-red-400 font-medium">
+            {clearModal === "orders" && "Будут удалены все заказы."}
+            {clearModal === "drivers" && "Будут удалены все водители."}
+            {clearModal === "passengers" && "Будут удалены все пассажиры и связанные заказы."}
+            {clearModal === "all" && "Будут удалены все заказы, водители и пассажиры."}
+            {" "}Действие необратимо.
+          </p>
+          <div className="flex gap-3 pt-4">
+            <button
+              onClick={async () => {
+                try {
+                  setClearing(true);
+                  if (clearModal === "orders") {
+                    const r = await ordersApi.clearAllOrders(true);
+                    toast.success(`Удалено заказов: ${r.deleted_count}`);
+                  } else if (clearModal === "drivers") {
+                    const r = await driversApi.clearAllDrivers(true);
+                    toast.success(`Удалено водителей: ${r.deleted_count}`);
+                  } else if (clearModal === "passengers") {
+                    const r = await passengersApi.clearAllPassengers(true);
+                    toast.success(`Удалено заказов: ${r.deleted_orders}, пассажиров: ${r.deleted_passengers}`);
+                  } else if (clearModal === "all") {
+                    const r1 = await passengersApi.clearAllPassengers(true);
+                    const r2 = await driversApi.clearAllDrivers(true);
+                    toast.success(`Удалено заказов: ${r1.deleted_orders}, пассажиров: ${r1.deleted_passengers}, водителей: ${r2.deleted_count}`);
+                  }
+                  setClearModal(null);
+                } catch (err: any) {
+                  toast.error(err.response?.data?.error || "Ошибка очистки");
+                } finally {
+                  setClearing(false);
+                }
+              }}
+              disabled={clearing}
+              className="flex-1 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {clearing ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+              Подтвердить
+            </button>
+            <button
+              onClick={() => setClearModal(null)}
+              disabled={clearing}
+              className="flex-1 py-2 bg-gray-200 dark:bg-gray-600 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-500"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Notifications */}
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">

@@ -112,6 +112,17 @@ export const passengersApi = {
   },
 
   /**
+   * Очистить всех пассажиров (требует confirm: true). Удаляет также заказы.
+   */
+  async clearAllPassengers(confirm: boolean = false): Promise<{ success: boolean; deleted_passengers: number; deleted_orders: number }> {
+    const response = await api.post<{ success: boolean; deleted_passengers: number; deleted_orders: number }>(
+      '/passengers/clear-all/',
+      { confirm }
+    );
+    return response.data;
+  },
+
+  /**
    * Поиск пассажиров по телефону
    */
   async searchPassengersByPhone(phone: string): Promise<Passenger[]> {

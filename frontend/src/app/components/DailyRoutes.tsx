@@ -206,53 +206,25 @@ export function DailyRoutes() {
       map.geoObjects.add(dropoffPm);
       geoObjectsRef.current.push(dropoffPm);
 
-      // Маршрут по дорогам (pickup → dropoff)
-      try {
-        const multiRoute = await ymaps.route(
-          [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
-          { mapStateAutoApply: false }
-        ) as any;
-        const paths = multiRoute.getPaths();
-        for (let p = 0; p < paths.getLength(); p++) {
-          const path = paths.get(p);
-          path.options.set({ strokeColor: color, strokeWidth: 4, opacity: 0.85 });
-        }
-        map.geoObjects.add(multiRoute);
-        geoObjectsRef.current.push(multiRoute);
-      } catch {
-        const line = new ymaps.Polyline(
-          [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
-          {},
-          { strokeColor: color, strokeWidth: 3, opacity: 0.8 }
-        );
-        map.geoObjects.add(line);
-        geoObjectsRef.current.push(line);
-      }
+      // Маршрут pickup → dropoff (Polyline вместо ymaps.route — избегаем _overlayClass bug)
+      const line = new ymaps.Polyline(
+        [[order.pickup_lat, order.pickup_lon], [order.dropoff_lat, order.dropoff_lon]],
+        {},
+        { strokeColor: color, strokeWidth: 4, opacity: 0.85 }
+      );
+      map.geoObjects.add(line);
+      geoObjectsRef.current.push(line);
 
-      // Холостой пробег по дорогам (предыдущий dropoff → текущий pickup)
+      // Холостой пробег (предыдущий dropoff → текущий pickup)
       if (idx > 0) {
         const prev = route.orders[idx - 1];
-        try {
-          const deadheadRoute = await ymaps.route(
-            [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
-            { mapStateAutoApply: false }
-          ) as any;
-          const dPaths = deadheadRoute.getPaths();
-          for (let p = 0; p < dPaths.getLength(); p++) {
-            const path = dPaths.get(p);
-            path.options.set({ strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 });
-          }
-          map.geoObjects.add(deadheadRoute);
-          geoObjectsRef.current.push(deadheadRoute);
-        } catch {
-          const deadhead = new ymaps.Polyline(
-            [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
-            {},
-            { strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 }
-          );
-          map.geoObjects.add(deadhead);
-          geoObjectsRef.current.push(deadhead);
-        }
+        const deadhead = new ymaps.Polyline(
+          [[prev.dropoff_lat, prev.dropoff_lon], [order.pickup_lat, order.pickup_lon]],
+          {},
+          { strokeColor: color, strokeWidth: 2, strokeStyle: "dash", opacity: 0.4 }
+        );
+        map.geoObjects.add(deadhead);
+        geoObjectsRef.current.push(deadhead);
       }
     }
   };

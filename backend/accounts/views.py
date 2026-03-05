@@ -380,6 +380,33 @@ class PassengerViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=False, methods=['post'], url_path='clear-all')
+    def clear_all_passengers(self, request):
+        """Очистить всех пассажиров. Требует confirm=true. Сначала удаляются заказы."""
+        if not request.user.is_staff:
+            return Response({'error': 'Нет прав'}, status=status.HTTP_403_FORBIDDEN)
+        confirm = request.data.get('confirm') or request.query_params.get('confirm')
+        if str(confirm).lower() not in ('true', '1', 'yes'):
+            from orders.models import Order
+            pc, oc = Passenger.objects.count(), Order.objects.count()
+            return Response({
+                'message': 'Для подтверждения передайте confirm=true. Будет удалено заказов и пассажиров.',
+                'passengers_count': pc, 'orders_count': oc
+            }, status=status.HTTP_400_BAD_REQUEST)
+        from orders.models import Order
+        orders_count = Order.objects.count()
+        passengers_count = Passenger.objects.count()
+        Order.objects.all().delete()
+        for p in Passenger.objects.all():
+            user = p.user
+            p.delete()
+            if not hasattr(user, 'driver'):
+                user.delete()
+        return Response({
+            'success': True, 'deleted_orders': orders_count, 'deleted_passengers': passengers_count,
+            'message': f'Удалено заказов: {orders_count}, пассажиров: {passengers_count}'
+        })
+
     @action(detail=False, methods=['post'], url_path='import')
     def import_passengers(self, request):
         """Импорт пассажиров из Excel файла"""
@@ -686,6 +713,29 @@ class DriverViewSet(viewsets.ModelViewSet):
         response_serializer = DriverSerializer(driver)
         headers = self.get_success_headers(response_serializer.data)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=False, methods=['post'], url_path='clear-all')
+    def clear_all_drivers(self, request):
+        """Очистить всех водителей. Требует confirm=true."""
+        if not request.user.is_staff:
+            return Response({'error': 'Нет прав'}, status=status.HTTP_403_FORBIDDEN)
+        confirm = request.data.get('confirm') or request.query_params.get('confirm')
+        if str(confirm).lower() not in ('true', '1', 'yes'):
+            count = Driver.objects.count()
+            return Response({
+                'message': 'Для подтверждения передайте confirm=true.',
+                'drivers_count': count
+            }, status=status.HTTP_400_BAD_REQUEST)
+        count = Driver.objects.count()
+        for d in Driver.objects.all():
+            user = d.user
+            d.delete()
+            if not hasattr(user, 'passenger'):
+                user.delete()
+        return Response({
+            'success': True, 'deleted_count': count,
+            'message': f'Удалено водителей: {count}'
+        })
 
     def perform_update(self, serializer):
         """Обновление водителя с обновлением User"""

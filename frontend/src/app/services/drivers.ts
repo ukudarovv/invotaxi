@@ -94,6 +94,17 @@ export const driversApi = {
   },
 
   /**
+   * Очистить всех водителей (требует confirm: true)
+   */
+  async clearAllDrivers(confirm: boolean = false): Promise<{ success: boolean; deleted_count: number }> {
+    const response = await api.post<{ success: boolean; deleted_count: number }>(
+      '/drivers/clear-all/',
+      { confirm }
+    );
+    return response.data;
+  },
+
+  /**
    * Обновить онлайн статус водителя
    */
   async updateOnlineStatus(driverId: number, data: UpdateOnlineStatusRequest): Promise<Driver> {

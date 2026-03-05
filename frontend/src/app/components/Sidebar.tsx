@@ -64,9 +64,14 @@ export function Sidebar({ currentPage, setCurrentPage }: SidebarProps) {
   const { user, hasPermission, logout } = useAuth();
 
   // Filter menu items based on user permissions
-  const visibleMenuItems = menuItems.filter(
-    (item) => !item.permission || hasPermission(item.permission)
-  );
+  const visibleMenuItems = menuItems.filter((item) => {
+    if (!item.permission || hasPermission(item.permission)) {
+      // Скрыть Главную для оператора
+      if (user?.role === "operator" && item.id === "dashboard") return false;
+      return true;
+    }
+    return false;
+  });
 
   const getRoleLabel = (role: string) => {
     switch (role) {

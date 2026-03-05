@@ -6,8 +6,10 @@ import { MapView } from "./MapView";
 import { driversApi, Driver, CreateDriverRequest, UpdateDriverRequest } from "../services/drivers";
 import { regionsApi, Region } from "../services/regions";
 import { ordersApi, Order } from "../services/orders";
+import { useAuth } from "../context/AuthContext";
 
 export function Drivers() {
+  const { user } = useAuth();
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
   const [loading, setLoading] = useState(true);
@@ -336,27 +338,31 @@ export function Drivers() {
           <p className="text-gray-600 dark:text-gray-400">Просмотр и управление водителями</p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={handleDownloadTemplate}
-            disabled={downloadingTemplate}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Скачать шаблон Excel для импорта водителей"
-          >
-            {downloadingTemplate ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Download className="w-5 h-5" />
-            )}
-            {downloadingTemplate ? "Скачивание..." : "Скачать шаблон"}
-          </button>
-          <button
-            onClick={() => setImportModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
-            title="Импортировать водителей из Excel файла"
-          >
-            <Upload className="w-5 h-5" />
-            Импорт
-          </button>
+          {user?.role !== "operator" && (
+            <>
+              <button
+                onClick={handleDownloadTemplate}
+                disabled={downloadingTemplate}
+                className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Скачать шаблон Excel для импорта водителей"
+              >
+                {downloadingTemplate ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Download className="w-5 h-5" />
+                )}
+                {downloadingTemplate ? "Скачивание..." : "Скачать шаблон"}
+              </button>
+              <button
+                onClick={() => setImportModal(true)}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+                title="Импортировать водителей из Excel файла"
+              >
+                <Upload className="w-5 h-5" />
+                Импорт
+              </button>
+            </>
+          )}
           <button
             onClick={() => setAddModal(true)}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
@@ -528,13 +534,15 @@ export function Drivers() {
                 >
                   <Package className="w-5 h-5" />
                 </button>
-                <button
-                  onClick={() => setDeleteModal(String(driver.id))}
-                  className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                  title="Удалить"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
+                {user?.role !== "operator" && (
+                  <button
+                    onClick={() => setDeleteModal(String(driver.id))}
+                    className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                    title="Удалить"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                )}
               </div>
             </div>
           </div>

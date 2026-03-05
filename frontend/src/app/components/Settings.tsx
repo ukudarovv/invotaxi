@@ -6,8 +6,10 @@ import { ordersApi } from "../services/orders";
 import { driversApi } from "../services/drivers";
 import { passengersApi } from "../services/passengers";
 import { toast } from "sonner";
+import { useAuth } from "../context/AuthContext";
 
 export function Settings() {
+  const { user } = useAuth();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -366,7 +368,8 @@ export function Settings() {
         </div>
       </div>
 
-      {/* Data cleanup */}
+      {/* Data cleanup — скрыто для оператора */}
+      {user?.role !== "operator" && (
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-sm border border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900 flex items-center justify-center text-red-600 dark:text-red-400">
@@ -408,6 +411,7 @@ export function Settings() {
           </button>
         </div>
       </div>
+      )}
 
       {/* Clear Data Modal */}
       <Modal

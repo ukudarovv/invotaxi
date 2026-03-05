@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Modal } from "./Modal";
 import { passengersApi, Passenger as ApiPassenger } from "../services/passengers";
 import { regionsApi, Region } from "../services/regions";
+import { useAuth } from "../context/AuthContext";
 
 // Локальный интерфейс для UI компонента
 interface Passenger {
@@ -25,6 +26,7 @@ const categories = ["Все", "I группа", "II группа", "III груп
 const disabilityOptions = ["I группа", "II группа", "III группа", "Ребенок-инвалид"];
 
 export function Passengers() {
+  const { user } = useAuth();
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [regions, setRegions] = useState<Region[]>([]);
   const [loading, setLoading] = useState(true);
@@ -282,27 +284,31 @@ export function Passengers() {
           <p className="text-gray-600 dark:text-gray-400">Просмотр и управление пассажирами</p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={handleDownloadTemplate}
-            disabled={downloadingTemplate}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Скачать шаблон Excel для импорта пассажиров"
-          >
-            {downloadingTemplate ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <Download className="w-5 h-5" />
-            )}
-            {downloadingTemplate ? "Скачивание..." : "Скачать шаблон"}
-          </button>
-          <button
-            onClick={() => setImportModal(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
-            title="Импортировать пассажиров из Excel файла"
-          >
-            <Upload className="w-5 h-5" />
-            Импорт
-          </button>
+          {user?.role !== "operator" && (
+            <>
+              <button
+                onClick={handleDownloadTemplate}
+                disabled={downloadingTemplate}
+                className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="Скачать шаблон Excel для импорта пассажиров"
+              >
+                {downloadingTemplate ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Download className="w-5 h-5" />
+                )}
+                {downloadingTemplate ? "Скачивание..." : "Скачать шаблон"}
+              </button>
+              <button
+                onClick={() => setImportModal(true)}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
+                title="Импортировать пассажиров из Excel файла"
+              >
+                <Upload className="w-5 h-5" />
+                Импорт
+              </button>
+            </>
+          )}
           <button
             onClick={handleAddPassenger}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
@@ -475,13 +481,15 @@ export function Passengers() {
                       >
                         <Phone className="w-5 h-5" />
                       </button>
-                      <button
-                        className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                        onClick={() => setDeleteModal(passenger.id)}
-                        title="Удалить"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                      {user?.role !== "operator" && (
+                        <button
+                          className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                          onClick={() => setDeleteModal(passenger.id)}
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

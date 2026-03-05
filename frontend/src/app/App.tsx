@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./context/ThemeContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -35,6 +35,13 @@ function MainApp() {
   const { user, isLoading } = useAuth();
   const [currentPage, setCurrentPage] = useState<PageType>("dashboard");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+
+  // Оператор по умолчанию попадает на Заказы, а не на Главную
+  useEffect(() => {
+    if (user?.role === "operator" && currentPage === "dashboard") {
+      setCurrentPage("orders");
+    }
+  }, [user?.role, currentPage]);
 
   const navigateToOrder = useCallback((orderId: string) => {
     setSelectedOrderId(orderId);

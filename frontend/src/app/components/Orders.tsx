@@ -10,6 +10,7 @@ import { RouteMapPicker } from "./RouteMapPicker";
 import { RouteMapView } from "./RouteMapView";
 import { toast } from "sonner";
 import { debounce } from "../utils/debounce";
+import { useAuth } from "../context/AuthContext";
 
 const statuses = ["Все", "Ожидание", "В пути", "Выполнено", "Отменён"];
 
@@ -39,6 +40,7 @@ type SortField = 'id' | 'created_at' | 'status' | 'price' | 'passenger';
 type SortDirection = 'asc' | 'desc';
 
 export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
+  const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1087,13 +1089,15 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <Sparkles className="w-5 h-5" />
             Генерировать заказы
           </button>
-          <button 
-            onClick={() => setImportModal(true)}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 hidden"
-          >
-            <Upload className="w-5 h-5" />
-            Импорт заказов
-          </button>
+          {user?.role !== "operator" && (
+            <button 
+              onClick={() => setImportModal(true)}
+              className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+            >
+              <Upload className="w-5 h-5" />
+              Импорт заказов
+            </button>
+          )}
           <button 
             onClick={() => setExportModal(true)}
             className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
@@ -1101,13 +1105,15 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
             <Download className="w-5 h-5" />
             Экспорт
           </button>
-          <button 
-            onClick={() => setClearAllModal(true)}
-            className="bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
-          >
-            <X className="w-5 h-5" />
-            Очистить все заказы
-          </button>
+          {user?.role !== "operator" && (
+            <button 
+              onClick={() => setClearAllModal(true)}
+              className="bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+            >
+              <X className="w-5 h-5" />
+              Очистить все заказы
+            </button>
+          )}
           <button 
             onClick={() => setCreateModal(true)}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-600"
@@ -1759,7 +1765,7 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               <p className="dark:text-white font-medium">{selectedOrder.id}</p>
             </div>
 
-            {getAvailableStatuses(selectedOrder.order.status).includes('cancelled') && (
+            {user?.role !== "operator" && getAvailableStatuses(selectedOrder.order.status).includes('cancelled') && (
               <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <p className="text-sm font-medium text-amber-800 dark:text-amber-200 mb-2">Отменить заказ</p>
                 <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">Чтобы отменить заказ, выберите «Отменено» в статусе ниже или нажмите кнопку:</p>

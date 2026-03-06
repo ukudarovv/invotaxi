@@ -452,80 +452,67 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
     returnTime,
   ]);
 
-  // Обработчик создания заказа
-  const handleCreateOrder = async () => {
-    // Валидация пассажира
+  // Общая логика создания заказа. Возвращает true при успехе, false при ошибке.
+  const performCreateOrder = async (): Promise<boolean> => {
     if (!passengerPhone || passengerPhone.trim().length === 0) {
       toast.error("Введите телефон пассажира");
-      return;
+      return false;
     }
 
-    // Определяем режим работы с пассажиром
     let useExistingPassenger = false;
     let useNewPassenger = false;
     let passengerIdToUse: number | null = null;
-    
-    // Если найден пассажир и он выбран или режим не установлен - используем существующего
+
     if (selectedPassengerMode === 'existing' && selectedExistingPassengerId) {
       useExistingPassenger = true;
       passengerIdToUse = selectedExistingPassengerId;
     } else if (matchingPassengers.length > 0 && selectedPassengerMode !== 'new') {
-      // Если найден пассажир и режим не "новый", используем первого найденного
       useExistingPassenger = true;
       passengerIdToUse = selectedExistingPassengerId || matchingPassengers[0].id;
     } else {
-      // Во всех остальных случаях создаем нового пассажира
       useNewPassenger = true;
-      // Валидация для нового пассажира
       if (!passengerName || passengerName.trim().length === 0) {
         toast.error("Введите имя пассажира");
-        return;
+        return false;
       }
       if (!passengerDisabilityCategory) {
         toast.error("Выберите категорию инвалидности");
-        return;
+        return false;
       }
     }
 
     if (!pickupObjectName.trim()) {
       toast.error("Укажите название объекта (откуда). Например: Дом инвалида, Поликлиника 3. Диспетчер ориентируется по названию.");
-      return;
+      return false;
     }
-
     if (!pickupCoords) {
       toast.error("Выберите точку на карте для места отправления");
-      return;
+      return false;
     }
-
     if (!dropoffObjectName.trim()) {
       toast.error("Укажите название объекта (куда). Например: Поликлиника 3, Школа №5. Диспетчер ориентируется по названию.");
-      return;
+      return false;
     }
-
     if (!dropoffCoords) {
       toast.error("Выберите точку на карте для места назначения");
-      return;
+      return false;
     }
-
     if (!orderDate || !orderTime) {
       toast.error("Укажите дату и время поездки");
-      return;
+      return false;
     }
-
     if (isRoundTrip && (!returnDate || !returnTime)) {
       toast.error("Укажите дату и время обратной поездки");
-      return;
+      return false;
     }
 
     try {
       setCreatingOrder(true);
 
-      // Формируем дату и время
       const [hours, minutes] = orderTime.split(':');
       const desiredPickupTime = new Date(orderDate);
       desiredPickupTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
-      // Используем адрес, если указан, иначе используем координаты как адрес
       const pickupTitle = pickupAddress.trim() || `${pickupCoords!.lat.toFixed(6)}, ${pickupCoords!.lon.toFixed(6)}`;
       const dropoffTitle = dropoffAddress.trim() || `${dropoffCoords!.lat.toFixed(6)}, ${dropoffCoords!.lon.toFixed(6)}`;
 
@@ -561,19 +548,17 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       const pickupData = { title: pickupTitle, objectName: pickupObjectName.trim(), lat: pickupCoords!.lat, lon: pickupCoords!.lon };
       const dropoffData = { title: dropoffTitle, objectName: dropoffObjectName.trim(), lat: dropoffCoords!.lat, lon: dropoffCoords!.lon };
 
-      // Заказ "туда" (A -> B)
       const orderDataThere = buildOrderData(pickupData, dropoffData, desiredPickupTime, orderNote);
       if (!useExistingPassenger && !orderDataThere.passenger_phone) {
         toast.error("Телефон пассажира не может быть пустым");
         setCreatingOrder(false);
-        return;
+        return false;
       }
 
       console.log('Отправляем данные заказа (туда):', orderDataThere);
       const newOrderThere = await ordersApi.createOrder(orderDataThere);
 
       if (isRoundTrip) {
-        // Заказ "обратно" (B -> A) — точки меняются местами
         const [retHours, retMinutes] = returnTime.split(':');
         const returnPickupTime = new Date(returnDate);
         returnPickupTime.setHours(parseInt(retHours), parseInt(retMinutes), 0, 0);
@@ -587,15 +572,49 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       } else {
         toast.success("Заказ успешно создан!");
       }
-      
-      // Обновляем список заказов
+
       loadOrders();
-      
-      // Закрываем модальное окно и сбрасываем форму
+      return true;
+    } catch (err: any) {
+      console.error("Ошибка создания заказа:", err);
+      toast.error(err.response?.data?.detail || err.message || "Ошибка создания заказа");
+      return false;
+    } finally {
+      setCreatingOrder(false);
+    }
+  };
+
+  const resetRouteAndTime = () => {
+    setGeocodeErrorPickup(null);
+    setGeocodeErrorDropoff(null);
+    setPickupAddress("");
+    setPickupObjectName("");
+    setDropoffAddress("");
+    setDropoffObjectName("");
+    setPickupCoords(null);
+    setDropoffCoords(null);
+    setPickupLatInput("");
+    setPickupLonInput("");
+    setDropoffLatInput("");
+    setDropoffLonInput("");
+    setOrderNote("");
+    setOrderHasCompanion(false);
+    setIsRoundTrip(false);
+    setReturnDate("");
+    setReturnTime("");
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    setOrderDate(tomorrow.toISOString().split('T')[0]);
+    setOrderTime("10:00");
+  };
+
+  const handleCreateOrder = async () => {
+    const success = await performCreateOrder();
+    if (success) {
       setCreateModal(false);
       setGeocodeErrorPickup(null);
       setGeocodeErrorDropoff(null);
-      // Сброс формы пассажира
       setPassengerPhone("");
       setPassengerName("");
       setPassengerRegionId("");
@@ -604,32 +623,15 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
       setMatchingPassengers([]);
       setSelectedPassengerMode(null);
       setSelectedExistingPassengerId(null);
-      setPickupAddress("");
-      setPickupObjectName("");
-      setDropoffAddress("");
-      setDropoffObjectName("");
-      setPickupCoords(null);
-      setDropoffCoords(null);
-      setOrderHasCompanion(false);
-      setPickupLatInput("");
-      setPickupLonInput("");
-      setDropoffLatInput("");
-      setDropoffLonInput("");
+      resetRouteAndTime();
       setSelectedPassengerId("");
-      setOrderNote("");
-      setIsRoundTrip(false);
-      setReturnDate("");
-      setReturnTime("");
-      const now = new Date();
-      const tomorrow = new Date(now);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      setOrderDate(tomorrow.toISOString().split('T')[0]);
-      setOrderTime("10:00");
-    } catch (err: any) {
-      console.error("Ошибка создания заказа:", err);
-      toast.error(err.response?.data?.detail || err.message || "Ошибка создания заказа");
-    } finally {
-      setCreatingOrder(false);
+    }
+  };
+
+  const handleCreateOrderAndAddAnother = async () => {
+    const success = await performCreateOrder();
+    if (success) {
+      resetRouteAndTime();
     }
   };
 
@@ -2223,6 +2225,14 @@ export function Orders({ selectedOrderId, onOrderClose }: OrdersProps = {}) {
               className="px-6 py-2.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             >
               Отмена
+            </button>
+            <button
+              onClick={handleCreateOrderAndAddAnother}
+              disabled={!isCreateOrderFormValid() || creatingOrder}
+              className="px-6 py-2.5 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Plus className="w-5 h-5" />
+              Создать и добавить ещё
             </button>
             <button 
               onClick={handleCreateOrder}
